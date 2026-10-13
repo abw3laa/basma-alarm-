@@ -157,7 +157,9 @@ class AlarmActionReceiver : BroadcastReceiver() {
             ACTION_DONE -> { AlarmPrefs.markDone(context, base); AlarmScheduler.schedule(context) }
         }
         context.stopService(Intent(context, AlarmPlaybackService::class.java))
-        context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (intent.action == ACTION_STOP) manager.notify(NOTIFICATION_ID, buildNotification(context, base, day))
+        else manager.cancel(NOTIFICATION_ID)
     }
 }
 
@@ -167,9 +169,8 @@ fun ensureAlarmChannel(c: Context) {
         if (nm.getNotificationChannel(CHANNEL_ALARM) == null) {
             nm.createNotificationChannel(NotificationChannel(CHANNEL_ALARM, "تنبيهات مواعيد البصمة", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "صوت واهتزاز تذكيرات مواعيد البصمة"
-                setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM), AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build())
-                enableVibration(true)
-                vibrationPattern = longArrayOf(0, 700, 450)
+                setSound(null, null)
+                enableVibration(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             })
         }

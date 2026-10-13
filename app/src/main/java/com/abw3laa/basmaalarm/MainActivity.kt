@@ -7,6 +7,11 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
+import android.app.AlertDialog
+import androidx.core.content.FileProvider
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -52,6 +57,11 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.io.File
+import java.io.FileOutputStream
+import java.net.URL
+import org.json.JSONObject
+import kotlin.concurrent.thread
 
 private val Navy = Color(0xFF0F2537)
 private val Teal = Color(0xFF006A61)
@@ -60,6 +70,7 @@ private val Canvas = Color(0xFFF7F9FB)
 private val Danger = Color(0xFFBA1A1A)
 
 class MainActivity : ComponentActivity() {
+    private var pendingApk: File? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = android.graphics.Color.rgb(247, 249, 251)
@@ -70,6 +81,55 @@ class MainActivity : ComponentActivity() {
         ensureAlarmChannel(this)
         if (AlarmPrefs.sp(this).contains("start")) AlarmScheduler.schedule(this)
         setContent { BasmaApp() }
+        checkForUpdate()
+    }
+
+    private fun checkForUpdate() {
+        thread {
+            try {
+                val connection = URL("https://raw.githubusercontent.com/abw3laa/basma-alarm-updates/main/update.json").openConnection()
+                connection.connectTimeout = 7000; connection.readTimeout = 7000
+                val json = JSONObject(connection.getInputStream().bufferedReader().use { it.readText() })
+                val installedInfo = packageManager.getPackageInfo(packageName, 0)
+                val current = if (Build.VERSION.SDK_INT >= 28) installedInfo.longVersionCode.toInt() else @Suppress("DEPRECATION") installedInfo.versionCode
+                if (json.optInt("versionCode", 0) > current) Handler(Looper.getMainLooper()).post {
+                    AlertDialog.Builder(this).setTitle("تحديث متوفر")
+                        .setMessage("يتوفر الإصدار ${json.optString("versionName")}. هل تريد تنزيله وتثبيته الآن؟")
+                        .setNegativeButton("لاحقاً", null)
+                        .setPositiveButton("تثبيت الآن") { _, _ -> downloadUpdate(json.optString("apkUrl")) }.show()
+                }
+            } catch (_: Exception) { /* No manifest yet or offline; continue working offline. */ }
+        }
+    }
+
+    private fun downloadUpdate(url: String) {
+        if (!url.startsWith("https://")) { Toast.makeText(this, "رابط التحديث غير جاهز بعد", Toast.LENGTH_LONG).show(); return }
+        Toast.makeText(this, "جارٍ تنزيل التحديث…", Toast.LENGTH_SHORT).show()
+        thread {
+            try {
+                val connection = URL(url).openConnection(); connection.connectTimeout = 15000; connection.readTimeout = 30000
+                val file = File(cacheDir, "basma-update.apk")
+                connection.getInputStream().use { input -> FileOutputStream(file).use { output -> input.copyTo(output) } }
+                if (file.length() < 100_000) throw IllegalStateException("Downloaded package is too small")
+                Handler(Looper.getMainLooper()).post { pendingApk = file; installOrRequestPermission(file) }
+            } catch (_: Exception) { Handler(Looper.getMainLooper()).post { Toast.makeText(this, "تعذر تنزيل التحديث. تحقق من الرابط والاتصال.", Toast.LENGTH_LONG).show() } }
+        }
+    }
+
+    private fun installOrRequestPermission(file: File) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            startActivityForResult(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")), 731)
+            return
+        }
+        val uri = FileProvider.getUriForFile(this, "$packageName.provider", file)
+        startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION))
+    }
+
+    @Deprecated("Android package installer permission flow")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 731) pendingApk?.let { if (Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()) installOrRequestPermission(it) }
     }
 }
 

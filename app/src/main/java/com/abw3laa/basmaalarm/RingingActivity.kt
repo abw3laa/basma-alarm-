@@ -39,6 +39,10 @@ class RingingActivity : ComponentActivity() {
         setContent { RingingContent(baseDay, windowDay, ::handle) }
     }
     private fun handle(action: String) {
+        if (action == ACTION_STOP) {
+            stopService(Intent(this, AlarmPlaybackService::class.java))
+            return
+        }
         when (action) {
             ACTION_DONE -> { AlarmPrefs.markDone(this, baseDay); AlarmScheduler.schedule(this) }
             ACTION_SNOOZE -> AlarmScheduler.snooze(this, baseDay, windowDay)
