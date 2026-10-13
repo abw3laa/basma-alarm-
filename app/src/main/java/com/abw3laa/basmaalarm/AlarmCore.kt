@@ -49,10 +49,15 @@ object AlarmScheduler {
     fun cancelAll(c: Context) {
         val am = c.getSystemService(AlarmManager::class.java)
         val s = AlarmPrefs.start(c); val interval = AlarmPrefs.interval(c); val count = AlarmPrefs.count(c)
-        for (n in 0 until count) for (d in 0..2) {
-            val day = s.plusDays(n.toLong() * interval + d).toEpochDay()
+        for (n in 0 until count) {
+            val base = s.plusDays(n.toLong() * interval).toEpochDay()
+            val snoozeId = 1_000_000 + (base % 500_000).toInt()
             val i = Intent(c, AlarmReceiver::class.java).setAction(ACTION_FIRE)
-            PendingIntent.getBroadcast(c, day.toInt(), i, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let { am.cancel(it); it.cancel() }
+            PendingIntent.getBroadcast(c, snoozeId, i, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let { am.cancel(it); it.cancel() }
+            for (d in 0..2) {
+                val day = base + d
+                PendingIntent.getBroadcast(c, day.toInt(), i, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let { am.cancel(it); it.cancel() }
+            }
         }
     }
     fun schedule(c: Context) {
