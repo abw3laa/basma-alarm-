@@ -6,9 +6,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.pm.PackageManager
+import android.graphics.PixelFormat
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
@@ -17,6 +22,12 @@ import android.os.IBinder
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import java.time.Instant
 import java.time.LocalDate
@@ -36,6 +47,7 @@ object AlarmPrefs {
     fun theme(c: Context) = sp(c).getString("theme", "system") ?: "system"
     fun vibrate(c: Context) = sp(c).getBoolean("vibrate", true)
     fun sound(c: Context) = sp(c).getBoolean("sound", true)
+    fun soundUri(c: Context): String? = sp(c).getString("sound_uri", null)
     fun completed(c: Context): Set<Long> = sp(c).getStringSet("completed", emptySet())?.mapNotNull { it.toLongOrNull() }?.toSet() ?: emptySet()
     fun markDone(c: Context, baseDay: Long) { sp(c).edit().putStringSet("completed", (completed(c) + baseDay).map { it.toString() }.toSet()).apply() }
 }
@@ -127,15 +139,19 @@ class BootReceiver : BroadcastReceiver() {
 
 class AlarmPlaybackService : Service() {
     private var ringtone: Ringtone? = null
+    private var alarmOverlay: View? = null
+    private var overlayManager: WindowManager? = null
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val base = intent?.getLongExtra(EXTRA_BASE_DAY, LocalDate.now().toEpochDay()) ?: LocalDate.now().toEpochDay()
         val day = intent?.getIntExtra(EXTRA_WINDOW, 1) ?: 1
         ensureAlarmChannel(this)
         startForeground(NOTIFICATION_ID, buildNotification(this, base, day))
-        if (AlarmPrefs.sound(this)) {
+        if (intent?.action == ACTION_MUTE) {
+            stopPlayback()
+        } else if (AlarmPrefs.sound(this)) {
             runCatching {
-                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                val uri = AlarmPrefs.soundUri(this)?.let { Uri.parse(it) } ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
                 ringtone = RingtoneManager.getRingtone(this, uri)?.apply {
                     audioAttributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
                     if (Build.VERSION.SDK_INT >= 28) isLooping = true
@@ -143,13 +159,72 @@ class AlarmPlaybackService : Service() {
                 }
             }
         }
-        if (AlarmPrefs.vibrate(this)) runCatching {
+        if (intent?.action != ACTION_MUTE && AlarmPrefs.vibrate(this)) runCatching {
             val vibrator = if (Build.VERSION.SDK_INT >= 31) getSystemService(VibratorManager::class.java).defaultVibrator else getSystemService(Vibrator::class.java)
             if (Build.VERSION.SDK_INT >= 26) vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 700, 450), 0)) else @Suppress("DEPRECATION") vibrator.vibrate(longArrayOf(0, 700, 450), 0)
         }
+        showAlarmOverlay(base, day)
         return START_STICKY
     }
-    override fun onDestroy() { ringtone?.stop(); runCatching { val v = if (Build.VERSION.SDK_INT >= 31) getSystemService(VibratorManager::class.java).defaultVibrator else getSystemService(Vibrator::class.java); v.cancel() }; super.onDestroy() }
+    private fun stopPlayback() {
+        ringtone?.stop(); ringtone = null
+        runCatching { val v = if (Build.VERSION.SDK_INT >= 31) getSystemService(VibratorManager::class.java).defaultVibrator else getSystemService(Vibrator::class.java); v.cancel() }
+    }
+    private fun showAlarmOverlay(base: Long, day: Int) {
+        if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) return
+        runCatching {
+            alarmOverlay?.let { overlayManager?.removeView(it) }
+            val dark = when (AlarmPrefs.theme(this)) { "dark" -> true; "light" -> false; else -> (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES }
+            val bg = if (dark) android.graphics.Color.rgb(10, 23, 33) else android.graphics.Color.rgb(247, 249, 251)
+            val card = if (dark) android.graphics.Color.rgb(25, 41, 53) else android.graphics.Color.WHITE
+            val fg = if (dark) android.graphics.Color.rgb(239, 244, 247) else android.graphics.Color.rgb(15, 37, 55)
+            val muted = if (dark) android.graphics.Color.rgb(188, 201, 210) else android.graphics.Color.rgb(82, 94, 103)
+            val teal = android.graphics.Color.rgb(0, 106, 97)
+            val red = android.graphics.Color.rgb(186, 26, 26)
+            fun label(text: String, size: Float, color: Int, bold: Boolean = false): TextView = TextView(this).apply {
+                this.text = text; textSize = size; setTextColor(color); gravity = Gravity.CENTER
+                if (bold) typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                setPadding(8, 12, 8, 12)
+            }
+            val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(28, 32, 28, 24); setBackgroundColor(bg) }
+            val lang = AlarmPrefs.language(this)
+            fun text(ar: String, tr: String, en: String) = when (lang) { "tr" -> tr; "en" -> en; else -> ar }
+            val clock = LocalTime.of(AlarmPrefs.hour(this), AlarmPrefs.minute(this)).format(java.time.format.DateTimeFormatter.ofPattern("h:mm a", java.util.Locale.getDefault()))
+            root.addView(label("◉  ${text("منبه البصمة نشط الآن", "Parmak izi alarmı etkin", "Fingerprint alarm active")}", 15f, red, true))
+            root.addView(label("$clock", 54f, fg, true))
+            root.addView(label(LocalDate.ofEpochDay(base).format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", java.util.Locale.forLanguageTag(lang))), 17f, muted))
+            root.addView(label(text("حان موعد البصمة", "Parmak izi zamanı", "Fingerprint appointment"), 25f, fg, true))
+            val dayCard = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(14, 8, 14, 8); background = GradientDrawable().apply { setColor(card); cornerRadius = 28f } }
+            dayCard.addView(label(text("نافذة الأيام الثلاثة المتاحة", "Üç günlük randevu aralığı", "Three-day appointment window"), 16f, fg, true))
+            dayCard.addView(label(text("اليوم $day من 3", "$day / 3. gün", "Day $day of 3"), 14f, teal, true))
+            root.addView(dayCard, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 24; bottomMargin = 24 })
+            fun actionButton(title: String, action: String, color: Int, content: Int) {
+                val button = label(title, 16f, content, true).apply {
+                    background = GradientDrawable().apply { setColor(color); cornerRadius = 30f }
+                    isClickable = true; isFocusable = true
+                    setOnClickListener {
+                        if (action == ACTION_MUTE) startService(Intent(this@AlarmPlaybackService, AlarmPlaybackService::class.java).setAction(ACTION_MUTE).putExtra(EXTRA_BASE_DAY, base).putExtra(EXTRA_WINDOW, day))
+                        else sendBroadcast(Intent(this@AlarmPlaybackService, AlarmActionReceiver::class.java).setAction(action).putExtra(EXTRA_BASE_DAY, base).putExtra(EXTRA_WINDOW, day))
+                    }
+                }
+                root.addView(button, LinearLayout.LayoutParams(-1, 56).apply { topMargin = 8 })
+            }
+            actionButton(text("تمت البصمة ✓", "Parmak izi tamamlandı ✓", "Fingerprint completed ✓"), ACTION_DONE, teal, android.graphics.Color.WHITE)
+            actionButton(text("ذكرني لاحقاً (60 دقيقة)", "60 dakika sonra hatırlat", "Snooze for 60 minutes"), ACTION_SNOOZE, card, fg)
+            actionButton(text("إيقاف الصوت فقط", "Yalnızca sesi durdur", "Stop sound only"), ACTION_MUTE, card, muted)
+            val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_SYSTEM_ALERT
+            val params = WindowManager.LayoutParams(-1, -1, type, WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_FULLSCREEN or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or WindowManager.LayoutParams.FLAG_DIM_BEHIND, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.CENTER; dimAmount = .82f }
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            wm.addView(root, params)
+            alarmOverlay = root; overlayManager = wm
+        }
+    }
+    override fun onDestroy() {
+        stopPlayback()
+        runCatching { alarmOverlay?.let { overlayManager?.removeView(it) } }
+        alarmOverlay = null
+        super.onDestroy()
+    }
     companion object { const val START = "START_ALARM" }
 }
 
@@ -157,14 +232,18 @@ class AlarmActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val base = intent.getLongExtra(EXTRA_BASE_DAY, LocalDate.now().toEpochDay())
         val day = intent.getIntExtra(EXTRA_WINDOW, 1)
+        if (intent.action == ACTION_STOP) {
+            context.startService(Intent(context, AlarmPlaybackService::class.java).setAction(ACTION_MUTE).putExtra(EXTRA_BASE_DAY, base).putExtra(EXTRA_WINDOW, day))
+            context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(context, base, day))
+            return
+        }
         when (intent.action) {
             ACTION_SNOOZE -> AlarmScheduler.snooze(context, base, day)
             ACTION_DONE -> { AlarmPrefs.markDone(context, base); AlarmScheduler.schedule(context) }
         }
         context.stopService(Intent(context, AlarmPlaybackService::class.java))
         val manager = context.getSystemService(NotificationManager::class.java)
-        if (intent.action == ACTION_STOP) manager.notify(NOTIFICATION_ID, buildNotification(context, base, day))
-        else manager.cancel(NOTIFICATION_ID)
+        manager.cancel(NOTIFICATION_ID)
     }
 }
 
