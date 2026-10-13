@@ -2,8 +2,15 @@
 
 مشروع Android أولي مبني على ملفات التصميم المرفقة، مع موارد كل شاشة فاتحة/داكنة وأيقونة التطبيق. الحزمة: `com.abw3laa.basmaalarm`، الحد الأدنى Android 6.0.
 
-## بناء نسخة Debug
-افتح المجلد في Android Studio ثم Sync Gradle و Build > Build APK(s). يلزم Android SDK 35. لا يتضمن المستودع Gradle Wrapper حالياً؛ Android Studio يستطيع إعداد Gradle محلياً.
+## GitHub Actions
+Workflow `.github/workflows/android.yml` runs on each push to `main` and can also be run manually from Actions. It always builds a **Debug CI APK** for build verification; that APK is not a production release. A stable, signed Release APK is produced only after these repository Actions secrets are configured:
+
+- `ANDROID_KEYSTORE_BASE64` — base64-encoded JKS/PKCS12 signing keystore
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+The signed release artifact is named `basma-release-signed`. Back up the keystore and passwords securely. Never commit them or regenerate the signing key: every future update must use the same key and application ID. Actions builds the artifact; this workflow does not publish a public GitHub Release.
 
 ## التحديثات (مستودع basma-alarm-updates)
 أضف `update.json` بالصيغة التالية، وضع رابط تنزيل APK حقيقي في `apkUrl`:
@@ -12,8 +19,5 @@
 ```
 يراجع التطبيق manifest عند بدء التشغيل ويعرض موافقة التثبيت من المصدر عند ضغط «تثبيت الآن». Android يتطلب موافقة المستخدم لكل تثبيت؛ التنزيل لا يعني تثبيتاً صامتاً. يجب توقيع جميع الإصدارات بنفس المفتاح وبـ`applicationId` و`versionCode` متوافقين. لا ترفع مفتاح التوقيع إلى Git.
 
-## قبل الإصدار
-- أضف مفتاح توقيع خاص وأبقِه سرياً.
-- تحقق من سياسة الأذونات وموعد المنبه الدقيق على أجهزة Android المستهدفة.
-- واجهات التصميم الأصلية محفوظة؛ Tailwind والخطوط المرتبطة خارجياً تتطلب اتصالاً إنترنتياً حالياً.
-- أزرار تهيئة المنبه/سجل المواعيد في HTML هي واجهات تصميم؛ يلزم استكمال منطق AlarmManager/قاعدة بيانات واختباره على جهاز قبل اعتبار التنبيه التشغيلي مكتملاً.
+## نطاق التنفيذ والاختبار
+ملفات الشاشات وأيقونة التطبيق الأصلية مضمنة. هذا هيكل Android أولي، وليس تطبيق منبه إنتاجياً مُتحققاً منه: جدولة المنبهات الأصلية، حفظ التذكيرات، اكتمال ترجمة التركية والإنجليزية، الأذونات وروابط المطور ما زالت تحتاج التنفيذ والاختبار على جهاز. بعض ملفات HTML تعتمد على Tailwind والخطوط الخارجية، لذلك قد يحتاج التنسيق إلى الإنترنت. لا يوجد Android SDK في بيئة إعداد المشروع الحالية؛ سيتم التحقق من البناء عبر Actions.
