@@ -1,5 +1,9 @@
 plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 
+dependencies {
+    implementation("androidx.activity:activity-ktx:1.10.1")
+}
+
 android {
     namespace = "com.abw3laa.basmaalarm"
     compileSdk = 35
