@@ -1,23 +1,19 @@
-# منبه بصمة — Android/Kotlin
+# منبه بصمة — Android/Kotlin أصلي
 
-مشروع Android أولي مبني على ملفات التصميم المرفقة، مع موارد كل شاشة فاتحة/داكنة وأيقونة التطبيق. الحزمة: `com.abw3laa.basmaalarm`، الحد الأدنى Android 6.0.
+إعادة هيكلة تطبيق Android بواجهات Jetpack Compose أصلية، مع حزمة `com.abw3laa.basmaalarm` و`versionCode=2` وAndroid 6.0 كحد أدنى.
+
+## الوظائف الحالية
+- واجهات Compose أصلية للترحيب، الرئيسية، إعداد الموعد، سجل المواعيد، والإعدادات؛ لا توجد صفحات WebView أو حالة هاتف مصوّرة.
+- جدول محلي قابل للحفظ لمواعيد دورية كل 28 يوماً أو أسبوعياً، مع 3 أيام تذكير لكل موعد.
+- جدولة AlarmManager، إشعار عالي الأولوية، خدمة صوت/اهتزاز، شاشة منبه فوق القفل، إجراءات تأكيد/تأجيل 60 دقيقة/إيقاف الصوت، واستعادة الجدولة بعد إعادة التشغيل أو تغيير الوقت.
+- إعداد الأذونات، وإعفاء البطارية، والظهور فوق التطبيقات، واللغة العربية/التركية/الإنجليزية، والثيم الفاتح/الداكن.
+- روابط واتساب وتلغرام وفيسبوك للمطور.
 
 ## GitHub Actions
-Workflow `.github/workflows/android.yml` runs on each push to `main` and can also be run manually from Actions. It always builds a **Debug CI APK** for build verification; that APK is not a production release. A stable, signed Release APK is produced only after these repository Actions secrets are configured:
+`.github/workflows/android.yml` يبني APK Debug للتحقق. يبني APK Release موقّعاً فقط عند توفير أسرار Actions: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`. لا ترفع ملف المفتاح إلى المستودع. كل تحديث يجب أن يستخدم مفتاح التوقيع ذاته ومعرّف الحزمة ذاته.
 
-- `ANDROID_KEYSTORE_BASE64` — base64-encoded JKS/PKCS12 signing keystore
-- `ANDROID_KEYSTORE_PASSWORD`
-- `ANDROID_KEY_ALIAS`
-- `ANDROID_KEY_PASSWORD`
+## التحديثات
+المخطط الأصلي لفحص مستودع `basma-alarm-updates` وMediaFire يحتاج ربطه مجدداً ضمن هذا التطبيق الأصلي بعد إصدار النسخة الأولى الموقعة؛ لا يوجد رابط APK حتى الآن. أندرويد يتطلب موافقة المستخدم لتثبيت كل تحديث.
 
-The signed release artifact is named `basma-release-signed`. Back up the keystore and passwords securely. Never commit them or regenerate the signing key: every future update must use the same key and application ID. Actions builds the artifact; this workflow does not publish a public GitHub Release.
-
-## التحديثات (مستودع basma-alarm-updates)
-أضف `update.json` بالصيغة التالية، وضع رابط تنزيل APK حقيقي في `apkUrl`:
-```json
-{"versionCode":2,"versionName":"1.0.1","apkUrl":"https://www.mediafire.com/file/.../basma.apk"}
-```
-يراجع التطبيق manifest عند بدء التشغيل ويعرض موافقة التثبيت من المصدر عند ضغط «تثبيت الآن». Android يتطلب موافقة المستخدم لكل تثبيت؛ التنزيل لا يعني تثبيتاً صامتاً. يجب توقيع جميع الإصدارات بنفس المفتاح وبـ`applicationId` و`versionCode` متوافقين. لا ترفع مفتاح التوقيع إلى Git.
-
-## نطاق التنفيذ والاختبار
-ملفات الشاشات وأيقونة التطبيق الأصلية مضمنة. هذا هيكل Android أولي، وليس تطبيق منبه إنتاجياً مُتحققاً منه: جدولة المنبهات الأصلية، حفظ التذكيرات، اكتمال ترجمة التركية والإنجليزية، الأذونات وروابط المطور ما زالت تحتاج التنفيذ والاختبار على جهاز. بعض ملفات HTML تعتمد على Tailwind والخطوط الخارجية، لذلك قد يحتاج التنسيق إلى الإنترنت. لا يوجد Android SDK في بيئة إعداد المشروع الحالية؛ سيتم التحقق من البناء عبر Actions.
+## التحقق قبل التوزيع
+نجاح البناء لا يغني عن تجربة التنبيه على أجهزة فعلية وإصدارات Android مختلفة، خصوصاً صلاحية المنبه الدقيق، قيود تشغيل الخدمة، قنوات الإشعارات، وإعدادات الشركات المصنعة لتوفير البطارية. راجع أذونات Android/Google Play حسب سياسة التوزيع الخاصة بك. لم تُختبر التنبيهات على جهاز حقيقي في بيئة العمل هذه.
