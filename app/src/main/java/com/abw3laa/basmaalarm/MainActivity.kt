@@ -41,8 +41,6 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.*
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -151,7 +149,7 @@ class MainActivity : ComponentActivity() {
     CompositionLocalProvider(LocalLayoutDirection provides direction) {
         MaterialTheme(colorScheme = if (dark) darkColorScheme(primary = Color(0xFF78D9CD), onPrimary = Navy, secondary = Color(0xFF78D9CD), background = bg, surface = surface, onSurface = ink, onBackground = ink, error = Color(0xFFFFB4AB)) else lightColorScheme(primary = Teal, onPrimary = Color.White, secondary = Teal, background = bg, surface = surface, onSurface = ink, onBackground = ink, error = Danger)) {
             Scaffold(containerColor = bg, bottomBar = {
-                if (page != "new" && page != "welcome") NavigationBar(containerColor = surface, tonalElevation = 6.dp) {
+                if (page != "new" && page != "welcome") Row(Modifier.fillMaxWidth().background(surface).navigationBarsPadding().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
                     NavItem("home", "home", Icons.Filled.Home, page, { page = it }, ink, muted)
                     NavItem("appointments", "appointments", Icons.Filled.CalendarMonth, page, { page = it }, ink, muted)
                     NavItem("history", "history", Icons.Filled.History, page, { page = it }, ink, muted)
@@ -172,8 +170,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun NavItem(pageKey: String, labelKey: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: String, onSelect: (String) -> Unit, ink: Color, muted: Color) {
-    NavigationBarItem(selected = selected == pageKey, onClick = { onSelect(pageKey) }, icon = { Icon(icon, null) }, label = { Text(tr(labelKey), fontSize = 11.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Teal, selectedTextColor = Teal, unselectedIconColor = muted, unselectedTextColor = muted, indicatorColor = Mint))
+@Composable private fun androidx.compose.foundation.layout.RowScope.NavItem(pageKey: String, labelKey: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: String, onSelect: (String) -> Unit, ink: Color, muted: Color) {
+    val color = if (selected == pageKey) Teal else muted
+    Column(Modifier.weight(1f).clickable { onSelect(pageKey) }.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(icon, null, tint = color, modifier = Modifier.size(22.dp))
+        Text(tr(labelKey), color = color, fontSize = 11.sp, textAlign = TextAlign.Center)
+    }
 }
 
 @Composable private fun WelcomeScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, begin: () -> Unit) {
