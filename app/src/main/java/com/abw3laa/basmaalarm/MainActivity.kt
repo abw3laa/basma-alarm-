@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material3.*
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -192,7 +195,7 @@ class MainActivity : ComponentActivity() {
     val next = AlarmScheduler.nextBase(context)
     val time = LocalTime.of(AlarmPrefs.hour(context), AlarmPrefs.minute(context))
     val interval = AlarmPrefs.interval(context)
-    val days = java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(), next).coerceAtLeast(0)
+    val days = java.time.temporal.ChronoUnit.DAYS.between(LocalDate.now(), next).coerceAtLeast(0).toInt()
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(bottom = 4.dp).verticalScroll(rememberScrollState())) {
         Header(tr("home"), Icons.Filled.Home, ink)
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
