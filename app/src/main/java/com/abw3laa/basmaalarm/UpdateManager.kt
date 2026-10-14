@@ -145,14 +145,15 @@ internal object UpdateManager {
     private fun enqueue(context: Context, info: UpdateInfo, url: String, callback: (File?, String) -> Unit) {
         runCatching {
             val uri = Uri.parse(url)
-            require(uri.scheme == "https" && uri.host.orEmpty().endsWith("mediafire.com"))
+            val host = uri.host.orEmpty().lowercase()
+            require(uri.scheme == "https" && (host == "mediafire.com" || host.endsWith(".mediafire.com")))
             val request = DownloadManager.Request(uri)
                 .addRequestHeader("User-Agent", "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
                 .addRequestHeader("Referer", info.apkUrl)
                 .setTitle("منبه بصمة — تحديث ${info.versionName}")
                 .setDescription("جارٍ تنزيل تحديث التطبيق في الخلفية")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                .setAllowedOverMetered(true).setAllowedOverRoaming(false)
+                .setAllowedOverRoaming(false)
                 .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "basma-update-${info.versionCode}.apk")
             val manager = context.getSystemService(DownloadManager::class.java)
             val cookies = android.webkit.CookieManager.getInstance().getCookie(info.apkUrl)
