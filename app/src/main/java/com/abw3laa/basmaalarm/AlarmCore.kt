@@ -47,7 +47,7 @@ object AlarmPrefs {
     fun interval(c: Context) = sp(c).getInt("interval", 28).coerceIn(1, 365)
     fun count(c: Context) = sp(c).getInt("count", 14).coerceIn(1, 60)
     fun language(c: Context) = sp(c).getString("language", "ar") ?: "ar"
-    fun theme(c: Context) = sp(c).getString("theme", "system") ?: "system"
+    fun theme(c: Context) = sp(c).getString("theme", "dark") ?: "dark"
     fun vibrate(c: Context) = sp(c).getBoolean("vibrate", true)
     fun sound(c: Context) = sp(c).getBoolean("sound", true)
     fun soundUri(c: Context): String? = sp(c).getString("sound_uri", null)

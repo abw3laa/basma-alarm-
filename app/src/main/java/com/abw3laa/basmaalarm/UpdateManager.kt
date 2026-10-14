@@ -12,6 +12,7 @@ import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.DownloadListener
 import android.webkit.WebView
+import android.webkit.WebResourceRequest
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import org.json.JSONObject
@@ -105,7 +106,7 @@ internal object UpdateManager {
             if (completed.get()) return
             val w = web ?: return
             attempts++
-            val script = """(function(){var a=[...document.querySelectorAll('a')];var x=a.find(e=>e.href.indexOf('https://download')===0&&e.href.indexOf('mediafire.com')>0&&e.href.toLowerCase().indexOf('.apk')>0);if(x)return x.href;var b=a.find(e=>/download/i.test((e.innerText||'')+' '+e.id));if(b&&b.href&&b.href!==location.href){if(b.href.indexOf('download')>=0&&b.href.indexOf('mediafire.com')>0)return b.href;b.click()}return ''})()"""
+            val script = """(function(){var a=document.getElementsByTagName('a'),i,u,b;function ok(s){return /^https:\/\/download[^/?#]*\.mediafire\.com\//i.test(s)&&/\.apk(?:$|[?#])/i.test(s)}for(i=0;i<a.length;i++){u=a[i].href||'';if(ok(u))return u}b=document.getElementById('downloadButton');if(b&&ok(b.href||''))return b.href;return ''})()"""
             w.evaluateJavascript(script) { raw ->
                 val candidate = runCatching { (JSONTokener("[$raw]").nextValue() as org.json.JSONArray).optString(0) }.getOrNull().orEmpty()
                 if (capture(candidate)) return@evaluateJavascript
@@ -127,6 +128,7 @@ internal object UpdateManager {
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String) { evaluateAndRetry() }
                     override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean = capture(url)
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = capture(request.url.toString())
                 }
                 setDownloadListener(DownloadListener { url, _, _, _, _ -> if (!capture(url)) finish(null, "mediafire_link_not_found") })
             }

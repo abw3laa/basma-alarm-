@@ -95,9 +95,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = android.graphics.Color.rgb(247, 249, 251)
-        window.navigationBarColor = android.graphics.Color.rgb(247, 249, 251)
-        if (Build.VERSION.SDK_INT >= 23) window.decorView.systemUiVisibility = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        val startupDark = when (AlarmPrefs.theme(this)) {
+            "dark" -> true
+            "light" -> false
+            else -> (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        val startupBarColor = if (startupDark) android.graphics.Color.rgb(17, 27, 36) else android.graphics.Color.rgb(247, 249, 251)
+        window.statusBarColor = startupBarColor
+        window.navigationBarColor = startupBarColor
+        if (Build.VERSION.SDK_INT >= 23) window.decorView.systemUiVisibility = if (startupDark) 0 else android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         ensureAlarmChannel(this)
         if (AlarmPrefs.hasSchedule(this)) AlarmScheduler.schedule(this)
         setContent { BasmaApp() }
@@ -587,7 +593,7 @@ class MainActivity : ComponentActivity() {
                             Image(painterResource(R.drawable.app_icon_zoomed), contentDescription = tr("about_app"), modifier = Modifier.size(92.dp))
                             Text(tr("app_name"), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
                             Text(tr("app_short_description"), color = muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
-                            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.2"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                         }
                     }
                     "developer" -> {
