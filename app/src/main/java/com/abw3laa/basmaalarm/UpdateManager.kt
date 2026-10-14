@@ -17,6 +17,7 @@ import android.widget.FrameLayout
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
@@ -171,7 +172,7 @@ internal object UpdateManager {
         val manager = context.getSystemService(DownloadManager::class.java)
         val out = File(context.cacheDir, "basma-update-${info.versionCode}.apk")
         val tmp = File(context.cacheDir, "basma-update-${info.versionCode}.part")
-        manager.openDownloadedFile(id).use { input -> FileOutputStream(tmp).use { output -> input.copyTo(output) } }
+        manager.openDownloadedFile(id).use { descriptor -> FileInputStream(descriptor.fileDescriptor).use { input -> FileOutputStream(tmp).use { output -> input.copyTo(output) } } }
         if (!isValidPackage(context, tmp, info)) throw IllegalStateException("APK package/signature validation failed")
         if (out.exists()) out.delete()
         if (!tmp.renameTo(out)) tmp.copyTo(out, overwrite = true)

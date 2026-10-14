@@ -612,7 +612,7 @@ class MainActivity : ComponentActivity() {
 @Composable private fun LanguageChoice(surface: Color, ink: Color, muted: Color, symbol: String, title: String, selected: Boolean, click: () -> Unit) {
     val dark = MaterialTheme.colorScheme.background.luminance() < .45f
     val accent = if (dark) Color(0xFF86F2E4) else Teal
-    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable(onClick = click), colors = CardDefaults.cardColors(containerColor = if (selected) (if (dark) Color(0xFF163F3A) else Color(0xFFE0F7F3) else surface), shape = RoundedCornerShape(13.dp), border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, accent) else null) {
+    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable(onClick = click), colors = CardDefaults.cardColors(containerColor = if (selected) { if (dark) Color(0xFF163F3A) else Color(0xFFE0F7F3) } else surface), shape = RoundedCornerShape(13.dp), border = if (selected) androidx.compose.foundation.BorderStroke(1.dp, accent) else null) {
         Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(symbol, fontSize = 22.sp)
             Text(title, Modifier.weight(1f).padding(horizontal = 12.dp), color = ink, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
