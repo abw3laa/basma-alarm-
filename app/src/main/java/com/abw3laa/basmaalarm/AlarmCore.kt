@@ -282,7 +282,7 @@ class AlarmPlaybackService : Service() {
                 setPadding(dp(17), dp(12), dp(17), dp(18)); setBackgroundColor(bg)
                 layoutDirection = if (isArabic) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
             }
-            scroll.addView(page, android.widget.ScrollView.LayoutParams(-1, -2))
+            scroll.addView(page, android.view.ViewGroup.LayoutParams(-1, -2))
             val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             val status = TextView(this).apply {
                 text = "●  ${text("منبه البصمة نشط الآن", "Parmak izi alarmı etkin", "Fingerprint alarm active")}"; textSize = 10f; typeface = Typeface.DEFAULT_BOLD; setTextColor(red)
