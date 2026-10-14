@@ -536,7 +536,7 @@ class MainActivity : ComponentActivity() {
         SettingsOption(surface, ink, muted, Icons.Filled.Palette, tr("appearance"), tr("appearance_sub"), when (theme) { "dark" -> tr("dark"); "light" -> tr("light"); else -> tr("system") }) { panel = "theme" }
         SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("alarm_options"), tr("alarm_settings_sub"), tr("customized")) { panel = "alarm" }
         SettingsOption(surface, ink, muted, Icons.Filled.Shield, tr("permissions"), tr("permissions_sub"), tr("manage")) { panel = "permissions" }
-        SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.2"}") { panel = "about" }
+        SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}") { panel = "about" }
         SettingsOption(surface, ink, muted, Icons.Filled.Fingerprint, tr("about_developer"), tr("developer_sub"), "") { panel = "developer" }
         SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("disclaimer"), tr("disclaimer_sub"), "") { panel = "disclaimer" }
     }
