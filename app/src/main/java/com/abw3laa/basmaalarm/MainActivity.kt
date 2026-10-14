@@ -530,7 +530,7 @@ class MainActivity : ComponentActivity() {
         SettingsOption(surface, ink, muted, Icons.Filled.Palette, tr("appearance"), tr("appearance_sub"), when (theme) { "dark" -> tr("dark"); "light" -> tr("light"); else -> tr("system") }) { panel = "theme" }
         SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("alarm_options"), tr("alarm_settings_sub"), tr("customized")) { panel = "alarm" }
         SettingsOption(surface, ink, muted, Icons.Filled.Shield, tr("permissions"), tr("permissions_sub"), tr("manage")) { panel = "permissions" }
-        SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.0"}") { panel = "about" }
+        SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.1"}") { panel = "about" }
         SettingsOption(surface, ink, muted, Icons.Filled.Fingerprint, tr("about_developer"), tr("developer_sub"), "") { panel = "developer" }
         SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("disclaimer"), tr("disclaimer_sub"), "") { panel = "disclaimer" }
     }
@@ -587,7 +587,7 @@ class MainActivity : ComponentActivity() {
                             Image(painterResource(R.drawable.app_icon_zoomed), contentDescription = tr("about_app"), modifier = Modifier.size(92.dp))
                             Text(tr("app_name"), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
                             Text(tr("app_short_description"), color = muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
-                            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.0"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.1"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                         }
                     }
                     "developer" -> {
@@ -596,9 +596,9 @@ class MainActivity : ComponentActivity() {
                             Text(tr("developer_name"), color = ink, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(top = 8.dp))
                             Text(tr("developer_intro"), color = muted, fontSize = 13.sp, textAlign = TextAlign.Center)
                         }
-                        DeveloperLink(surface, ink, Icons.Filled.Chat, "WhatsApp · +905354883886", tr("developer_whatsapp_sub"), "https://wa.me/905354883886")
-                        DeveloperLink(surface, ink, Icons.Filled.Send, "Telegram · @abw3laa", tr("developer_telegram_sub"), "https://t.me/abw3laa")
-                        DeveloperLink(surface, ink, Icons.Filled.Public, "Facebook", tr("developer_facebook_sub"), "https://www.facebook.com/share/1EykCQDkjB/")
+                        DeveloperLink(surface, ink, R.drawable.ic_brand_whatsapp, "WhatsApp", tr("developer_whatsapp_sub"), "https://wa.me/905354883886")
+                        DeveloperLink(surface, ink, R.drawable.ic_brand_telegram, "Telegram", tr("developer_telegram_sub"), "tg://resolve?domain=abw3laa", "https://t.me/abw3laa", "org.telegram.messenger")
+                        DeveloperLink(surface, ink, R.drawable.ic_brand_facebook, "Facebook", tr("developer_facebook_sub"), "https://www.facebook.com/share/1EykCQDkjB/")
                     }
                     else -> Text(tr("disclaimer_body"), color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, lineHeight = 22.sp)
                 }
@@ -695,7 +695,25 @@ class MainActivity : ComponentActivity() {
 }
 @Composable private fun PermissionCard(surface: Color, ink: Color, muted: Color, title: String, sub: String, click: () -> Unit) { Card(Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable(onClick = click), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(14.dp)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Shield, null, tint = Teal); Column(Modifier.weight(1f).padding(horizontal = 10.dp)) { Text(title, color = ink, fontWeight = FontWeight.SemiBold); Text(sub, color = muted, fontSize = 12.sp) }; Text(tr("enable"), color = Teal, fontWeight = FontWeight.Bold) } } }
 @Composable private fun ToggleRow(surface: Color, ink: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, checked: Boolean, change: (Boolean) -> Unit) { val accent = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF86F2E4) else Teal; Card(Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(14.dp)) { Row(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = accent, modifier = Modifier.size(24.dp)); Text(title, Modifier.weight(1f).padding(horizontal = 10.dp), color = ink); Switch(checked, change) } } }
-@Composable private fun DeveloperLink(surface: Color, ink: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, sub: String, url: String) { val c = LocalContext.current; Card(Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { runCatching { c.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }, colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(12.dp)) { Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, tint = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF86F2E4) else Teal, modifier = Modifier.size(23.dp)); Column(Modifier.padding(horizontal = 10.dp)) { Text(label, color = ink, fontWeight = FontWeight.SemiBold); Text(sub, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } } } }
+@Composable private fun DeveloperLink(surface: Color, ink: Color, iconRes: Int, label: String, sub: String, url: String, fallbackUrl: String? = null, targetPackage: String? = null) {
+    val context = LocalContext.current
+    Card(Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable {
+        val opened = runCatching {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            if (targetPackage != null) intent.setPackage(targetPackage)
+            context.startActivity(intent)
+        }.isSuccess
+        if (!opened && fallbackUrl != null) runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(fallbackUrl))) }
+    }, colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(12.dp)) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(iconRes), contentDescription = label, modifier = Modifier.size(28.dp))
+            Column(Modifier.padding(horizontal = 10.dp)) {
+                Text(label, color = ink, fontWeight = FontWeight.SemiBold)
+                Text(sub, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            }
+        }
+    }
+}
 
 @Composable private fun tr(k: String, n: Int? = null): String {
     val l = currentLanguage()
