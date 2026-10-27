@@ -11,8 +11,8 @@ android {
         applicationId = "com.abw3laa.basmaalarm"
         minSdk = 23
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.3.4"
+        versionCode = 9
+        versionName = "1.3.5"
     }
     buildFeatures { compose = true }
     compileOptions {

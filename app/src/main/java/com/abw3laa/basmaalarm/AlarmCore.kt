@@ -1,12 +1,17 @@
 package com.abw3laa.basmaalarm
 
 import android.app.AlarmManager
+import android.app.job.JobInfo
+import android.app.job.JobParameters
+import android.app.JobScheduler
+import android.app.JobService
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -20,6 +25,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PersistableBundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -29,11 +35,14 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 object AlarmPrefs {
     fun sp(c: Context) = AlarmSettings.preferences(c)
@@ -132,6 +141,16 @@ object AlarmScheduler {
         cancelAll(c)
         AlarmPrefs.schedules(c).forEach { schedule(c, it.id) }
         AlarmPrefs.sp(c).edit().putLong("last_schedule_success_ms", System.currentTimeMillis()).apply()
+        runCatching { AppointmentWidgetProvider.updateAll(c) }
+    }
+
+    /** After reboot, AlarmManager has discarded every alarm, so avoid the costly cancel-all pass. */
+    fun restoreAfterBoot(c: Context) {
+        AlarmPrefs.schedules(c).forEach { scheduleAppointments(c, it) }
+        AlarmPrefs.sp(c).edit()
+            .putLong("last_schedule_success_ms", System.currentTimeMillis())
+            .putLong("last_boot_restore_ms", System.currentTimeMillis())
+            .commit()
         runCatching { AppointmentWidgetProvider.updateAll(c) }
     }
 
@@ -258,7 +277,60 @@ class AlarmReceiver : BroadcastReceiver() {
 }
 
 class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) { AlarmScheduler.schedule(context) }
+    override fun onReceive(context: Context, intent: Intent) {
+        val action = intent.action ?: return
+        if (action !in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED, AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED)) return
+        AlarmRestoreJobService.enqueue(context.applicationContext, action != Intent.ACTION_BOOT_COMPLETED)
+    }
+}
+
+class AlarmRestoreJobService : JobService() {
+    private val executor = Executors.newSingleThreadExecutor()
+    @Volatile private var task: Future<*>? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    override fun onStartJob(params: JobParameters): Boolean {
+        task = executor.submit {
+            try {
+                if (params.extras.getBoolean(EXTRA_FULL_REBUILD)) AlarmScheduler.schedule(applicationContext)
+                else AlarmScheduler.restoreAfterBoot(applicationContext)
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to restore alarms after system broadcast", error)
+            } finally {
+                mainHandler.post { jobFinished(params, false) }
+            }
+        }
+        return true
+    }
+
+    override fun onStopJob(params: JobParameters): Boolean {
+        task?.cancel(true)
+        task = null
+        return true
+    }
+
+    override fun onDestroy() {
+        task?.cancel(true)
+        executor.shutdownNow()
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val TAG = "BasmaAlarmRestore"
+        private const val JOB_ID = 874_310
+        private const val EXTRA_FULL_REBUILD = "full_rebuild"
+
+        fun enqueue(context: Context, fullRebuild: Boolean) {
+            val extras = PersistableBundle().apply { putBoolean(EXTRA_FULL_REBUILD, fullRebuild) }
+            val job = JobInfo.Builder(JOB_ID, ComponentName(context, AlarmRestoreJobService::class.java))
+                .setPersisted(true)
+                .setOverrideDeadline(0L)
+                .setExtras(extras)
+                .build()
+            val result = context.getSystemService(JobScheduler::class.java).schedule(job)
+            if (result != JobScheduler.RESULT_SUCCESS) Log.e(TAG, "JobScheduler rejected alarm restoration job")
+        }
+    }
 }
 
 class AlarmPlaybackService : Service() {
