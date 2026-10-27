@@ -3,8 +3,8 @@ package com.abw3laa.basmaalarm
 import android.app.AlarmManager
 import android.app.job.JobInfo
 import android.app.job.JobParameters
-import android.app.JobScheduler
-import android.app.JobService
+import android.app.job.JobScheduler
+import android.app.job.JobService
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
