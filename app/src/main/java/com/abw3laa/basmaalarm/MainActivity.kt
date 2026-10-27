@@ -105,6 +105,8 @@ class MainActivity : ComponentActivity() {
         window.navigationBarColor = startupBarColor
         if (Build.VERSION.SDK_INT >= 23) window.decorView.systemUiVisibility = if (startupDark) 0 else android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         ensureAlarmChannel(this)
+        val draftId = AlarmPrefs.sp(this).getString("draft_schedule_id", null)
+        if (draftId != null) { ScheduleRepository.delete(this, draftId); AlarmPrefs.sp(this).edit().remove("draft_schedule_id").apply() }
         if (AlarmPrefs.hasSchedule(this)) AlarmScheduler.schedule(this)
         setContent { BasmaApp() }
         checkForUpdate()
@@ -216,7 +218,7 @@ class MainActivity : ComponentActivity() {
                 window?.decorView?.systemUiVisibility = if (dark) 0 else android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
             }
             Scaffold(containerColor = bg, bottomBar = {
-                if (page != "new" && page != "welcome") Row(Modifier.fillMaxWidth().background(surface).navigationBarsPadding().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
+                if (page != "new" && page != "welcome" && page != "setup") Row(Modifier.fillMaxWidth().background(surface).navigationBarsPadding().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceAround, verticalAlignment = Alignment.CenterVertically) {
                     NavItem("home", "home", Icons.Filled.Home, page, { page = it }, ink, muted)
                     NavItem("appointments", "appointments", Icons.Filled.CalendarMonth, page, { page = it }, ink, muted)
                     NavItem("history", "history", Icons.Filled.History, page, { page = it }, ink, muted)
@@ -225,14 +227,20 @@ class MainActivity : ComponentActivity() {
             }) { pad ->
                 Box(Modifier.fillMaxSize().padding(pad)) {
                     when (page) {
-                        "welcome" -> WelcomeScreen(lang, surface, ink, muted, bg) { AlarmPrefs.sp(context).edit().putBoolean("intro_shown", true).apply(); page = "home" }
-                        "new" -> NewAppointment(lang, surface, ink, muted, bg, onCancel = { page = if (AlarmPrefs.hasSchedule(context)) "appointments" else "home" }, onSaved = { refresh++; page = "home" })
+                        "welcome" -> WelcomeScreen(lang, surface, ink, muted, bg, beginSetup = { page = "setup" }, skip = { AlarmPrefs.sp(context).edit().putBoolean("intro_shown", true).apply(); page = "home" })
+                        "setup" -> SetupAssistantScreen(lang, surface, ink, muted, done = { AlarmPrefs.sp(context).edit().putBoolean("intro_shown", true).apply(); page = "home" })
+                        "new" -> NewAppointment(lang, surface, ink, muted, bg, onCancel = {
+                            val draft = AlarmPrefs.sp(context).getString("draft_schedule_id", null)
+                            if (draft != null) { ScheduleRepository.delete(context, draft); AlarmPrefs.sp(context).edit().remove("draft_schedule_id").apply(); AlarmScheduler.schedule(context) }
+                            page = if (AlarmPrefs.hasSchedule(context)) "appointments" else "home"
+                        }, onSaved = { AlarmPrefs.sp(context).edit().remove("draft_schedule_id").apply(); refresh++; page = "home" })
                         "appointments" -> AppointmentsScreen(lang, surface, ink, muted, bg, refresh, navigate = { page = it }, onRefresh = { refresh++ })
                         "history" -> HistoryScreen(lang, surface, ink, muted, bg, refresh)
                         "settings" -> SettingsScreen(lang, theme, dark, surface, ink, muted, bg,
                             setLang = { lang = it; AlarmPrefs.sp(context).edit().putString("language", it).apply() },
-                            setTheme = { theme = it; AlarmPrefs.sp(context).edit().putString("theme", it).apply() })
-                        else -> HomeScreen(lang, surface, ink, muted, bg, refresh, goNew = { page = "new" }, onRefresh = { refresh++ })
+                            setTheme = { theme = it; AlarmPrefs.sp(context).edit().putString("theme", it).apply() },
+                            openSetup = { page = "setup" })
+                        else -> HomeScreen(lang, surface, ink, muted, bg, refresh, goNew = { page = "new" }, onRefresh = { refresh++ }, openSettings = { page = "settings" })
                     }
                 }
             }
@@ -249,7 +257,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun WelcomeScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, begin: () -> Unit) {
+@Composable private fun WelcomeScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, beginSetup: () -> Unit, skip: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(18.dp))
         Surface(color = Color.White, shape = CircleShape, shadowElevation = 8.dp, modifier = Modifier.size(86.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Fingerprint, null, tint = Color(0xFF9B222C), modifier = Modifier.size(54.dp)) } }
@@ -259,16 +267,74 @@ class MainActivity : ComponentActivity() {
         val features = if (lang == "ar") listOf("تنبيهات فعلية لمواعيد البصمة" to "صوت واهتزاز مع تذكيرات مستمرة", "تكرار ذكي كل 28 يوماً أو أسبوعياً" to "اختر دورة المواعيد المناسبة", "نافذة متابعة لثلاثة أيام" to "تذكير بالموعد الأساسي والمهلة", "تذكير تلقائي بعد ساعة" to "أجّل التنبيه دون نسيان الموعد", "استعادة التنبيهات بعد إعادة التشغيل" to "إعادة جدولة المواعيد المحفوظة", "يعمل دون اتصال" to "مواعيدك محفوظة على الجهاز") else if (lang == "tr") listOf("Gerçek randevu alarmları" to "Sesli ve titreşimli hatırlatma", "28 günlük veya haftalık tekrar" to "Uygun randevu döngüsünü seçin", "Üç günlük takip aralığı" to "Ana tarih ve ek hatırlatmalar", "Bir saat sonra tekrar hatırlat" to "Alarmı ertele", "Yeniden başlatmada alarmları geri yükle" to "Kayıtlı randevular yeniden kurulur", "Çevrimdışı çalışır" to "Randevularınız cihazda saklanır") else listOf("Real appointment alarms" to "Sound and vibration reminders", "Repeat every 28 days or weekly" to "Choose the schedule that suits you", "Three-day follow-up window" to "Reminders for the appointment period", "Snooze for one hour" to "Delay without forgetting the date", "Restore alarms after reboot" to "Saved reminders are rescheduled", "Works offline" to "Your schedule stays on your device")
         features.forEachIndexed { index, pair -> Card(Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(16.dp), elevation = CardDefaults.cardElevation(1.dp)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) { BadgeText("${index + 1}", if (index == 0) Color(0xFFFFE8E7) else Mint, if (index == 0) Danger else Teal); Column(Modifier.padding(horizontal = 12.dp)) { Text(pair.first, color = ink, fontWeight = FontWeight.SemiBold); Text(pair.second, color = muted, fontSize = 12.sp) } } } }
         val dark = MaterialTheme.colorScheme.background.luminance() < .45f
-        Button(onClick = begin, Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 24.dp).height(54.dp), colors = ButtonDefaults.buttonColors(containerColor = if (dark) Color(0xFF78D9CD) else Navy, contentColor = if (dark) Navy else Color.White), shape = RoundedCornerShape(14.dp)) { Text(if (lang == "ar") "ابدأ الاستخدام الآن" else if (lang == "tr") "Şimdi başlayın" else "Get started", fontWeight = FontWeight.Bold) }
+        Button(onClick = beginSetup, Modifier.fillMaxWidth().padding(top = 14.dp).height(54.dp), colors = ButtonDefaults.buttonColors(containerColor = if (dark) Color(0xFF78D9CD) else Navy, contentColor = if (dark) Navy else Color.White), shape = RoundedCornerShape(14.dp)) { Text(if (lang == "ar") "إعداد التنبيهات" else if (lang == "tr") "Alarm kurulumunu yap" else "Set up reminders", fontWeight = FontWeight.Bold) }
+        TextButton(onClick = skip, Modifier.fillMaxWidth().padding(bottom = 18.dp)) { Text(if (lang == "ar") "المتابعة دون إعداد الآن" else if (lang == "tr") "Şimdilik geç" else "Continue without setup", color = muted) }
     }
 }
 
-@Composable private fun HomeScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, refresh: Int, goNew: () -> Unit, onRefresh: () -> Unit) {
+@Composable private fun SetupAssistantScreen(lang: String, surface: Color, ink: Color, muted: Color, done: () -> Unit) {
     val context = LocalContext.current
-    val hasSchedule = AlarmPrefs.hasSchedule(context)
+    var refresh by remember { mutableIntStateOf(0) }
+    val exactOk = remember(refresh) { Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms() }
+    val notificationOk = remember(refresh) { Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled() }
+    val overlayOk = remember(refresh) { Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(context) }
+    val fullOk = remember(refresh) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
+    val batteryOk = remember(refresh) { Build.VERSION.SDK_INT < 23 || context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
+    fun open(intent: Intent) { runCatching { context.startActivity(intent) } }
+    fun label(ar: String, tr: String, en: String) = when (lang) { "tr" -> tr; "en" -> en; else -> ar }
+    Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Header(label("إعداد التنبيهات", "Alarm kurulumu", "Reminder setup"), Icons.Filled.NotificationsActive, ink)
+        Text(label("راجع الإعدادات الأساسية حتى يعمل التنبيه بأفضل شكل. الظهور فوق التطبيقات واستثناء البطارية إعدادان اختياريان حسب رغبتك وهاتفك.", "Alarmların daha güvenilir çalışması için temel ayarları kontrol edin. Üstte gösterim ve pil istisnası isteğe bağlıdır.", "Review the key settings for reliable reminders. Overlay and battery exemption are optional and depend on your device."), color = muted, modifier = Modifier.padding(vertical = 8.dp))
+        PermissionEntry(label("الإشعارات", "Bildirimler", "Notifications"), notificationOk) { open(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }
+        PermissionEntry(label("المنبهات الدقيقة", "Kesin alarmlar", "Exact alarms"), exactOk) { if (Build.VERSION.SDK_INT >= 31) open(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))) }
+        PermissionEntry(label("واجهة ملء الشاشة على القفل", "Tam ekran alarm", "Full-screen alarm"), fullOk) { if (Build.VERSION.SDK_INT >= 34) open(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}"))) }
+        PermissionEntry(label("الظهور فوق التطبيقات (اختياري)", "Diğer uygulamaların üzerinde (isteğe bağlı)", "Display over other apps (optional)"), overlayOk) { open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) }
+        PermissionEntry(label("استثناء تحسين البطارية (اختياري)", "Pil optimizasyonu istisnası (isteğe bağlı)", "Battery optimization exemption (optional)"), batteryOk) { if (Build.VERSION.SDK_INT >= 23) open(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }
+        OutlinedButton(onClick = { refresh++ }, Modifier.fillMaxWidth().padding(top = 14.dp)) { Text(label("تحديث حالة الأذونات", "İzin durumunu yenile", "Refresh permission status")) }
+        Button(onClick = done, Modifier.fillMaxWidth().padding(top = 8.dp).height(52.dp)) { Text(label("إنهاء الإعداد والمتابعة", "Kurulumu bitir", "Finish setup")) }
+        TextButton(onClick = done, Modifier.fillMaxWidth()) { Text(label("تخطي الآن", "Şimdi geç", "Skip for now"), color = muted) }
+    }
+}
+
+@Composable private fun ScheduleReliabilityCard(lang: String, surface: Color, ink: Color, muted: Color, openSettings: () -> Unit) {
+    val context = LocalContext.current
+    val schedule = ScheduleRepository.active(context)
+    val exact = Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms()
+    val notifications = Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
+    val fullScreen = Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
+    val required = listOfNotNull(
+        if (schedule == null) tr("reliability_no_schedule") else null,
+        if (!exact) tr("reliability_exact_missing") else null,
+        if (!notifications) tr("reliability_notifications_missing") else null,
+        if (!fullScreen) tr("reliability_fullscreen_missing") else null,
+    )
+    val next = schedule?.let { AlarmScheduler.nextBase(context, it.id) }
+    val last = AlarmPrefs.sp(context).getLong("last_schedule_success_ms", 0L)
+    val status = if (required.isEmpty()) tr("reliability_ready") else required.joinToString(" • ")
+    val optionalWarnings = buildList {
+        if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(context)) add(when (lang) { "tr" -> "Üstte gösterim kapalı (isteğe bağlı)"; "en" -> "Overlay is off (optional)"; else -> "الظهور فوق التطبيقات غير مفعّل (اختياري)" })
+        if (Build.VERSION.SDK_INT >= 23 && !context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)) add(when (lang) { "tr" -> "Pil optimizasyonu hâlâ etkin olabilir"; "en" -> "Battery optimization may restrict delivery"; else -> "قد يقيّد تحسين البطارية وصول التنبيه" })
+    }
+    Card(Modifier.fillMaxWidth().padding(top = 6.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, if (required.isEmpty()) Teal.copy(alpha = .4f) else MaterialTheme.colorScheme.error.copy(alpha = .45f))) {
+        Column(Modifier.fillMaxWidth().clickable(onClick = openSettings).padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.NotificationsActive, null, tint = if (required.isEmpty()) Teal else MaterialTheme.colorScheme.error); Text(tr("reliability_title"), Modifier.weight(1f).padding(horizontal = 8.dp), color = ink, fontWeight = FontWeight.Bold); Text(tr("manage"), color = Teal, fontSize = 12.sp) }
+            Text(status, color = if (required.isEmpty()) muted else MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp))
+            optionalWarnings.forEach { Text(it, color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp)) }
+            if (next != null) Text("${tr("reliability_next")}: ${next.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US))}", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
+            if (last > 0L) Text("${tr("reliability_last_schedule")}: ${java.time.Instant.ofEpochMilli(last).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd/MM HH:mm", Locale.forLanguageTag(lang)))}", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
+            Text(tr("reliability_caveat"), color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
+        }
+    }
+}
+
+@Composable private fun HomeScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, refresh: Int, goNew: () -> Unit, onRefresh: () -> Unit, openSettings: () -> Unit) {
+    val context = LocalContext.current
+    val schedule = ScheduleRepository.active(context)
+    val hasSchedule = schedule != null
     var showDelete by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
         Header(tr("home"), Icons.Filled.Home, ink)
+        ScheduleReliabilityCard(lang, surface, ink, muted, openSettings)
         if (!hasSchedule) {
             Card(Modifier.fillMaxWidth().padding(top = 12.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(2.dp)) {
                 Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -279,68 +345,83 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } else {
-            val next = AlarmScheduler.nextBase(context)
-            val interval = AlarmPrefs.interval(context)
-            val time = LocalTime.of(AlarmPrefs.hour(context), AlarmPrefs.minute(context))
-            val days = ChronoUnit.DAYS.between(LocalDate.now(), next).coerceAtLeast(0).toInt()
+            val active = requireNotNull(schedule)
+            val next = AlarmScheduler.nextBase(context, active.id)
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) { Text(LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = muted, fontSize = 13.sp) }
-            Card(Modifier.fillMaxWidth().padding(top = 12.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(16.dp), elevation = CardDefaults.cardElevation(2.dp)) {
-                Column(Modifier.padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Shield, null, tint = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF86F2E4) else Teal, modifier = Modifier.size(34.dp))
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(tr("secure_alarm"), color = ink, fontWeight = FontWeight.Bold); Text(tr("secure_sub"), color = muted, fontSize = 12.sp) }
-                        Icon(Icons.Filled.Check, null, tint = Teal, modifier = Modifier.size(25.dp))
-                    }
-                    Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = goNew) { Icon(Icons.Filled.Edit, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("edit_schedule")) }
-                        TextButton(onClick = { showDelete = true }) { Icon(Icons.Filled.Delete, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("delete_schedule"), color = MaterialTheme.colorScheme.error) }
+            if (next == null) {
+                Card(Modifier.fillMaxWidth().padding(top = 12.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
+                    Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Filled.CalendarMonth, null, tint = Teal, modifier = Modifier.size(38.dp))
+                        Text(tr("schedule_ended"), color = ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+                        Text("${active.name}: ${tr("schedule_ended_sub")}", color = muted, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+                        Button(onClick = goNew, Modifier.fillMaxWidth().padding(top = 14.dp)) { Icon(Icons.Filled.Edit, null); Spacer(Modifier.width(6.dp)); Text(tr("extend_schedule")) }
                     }
                 }
-            }
-            Card(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 20.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(20.dp), elevation = CardDefaults.cardElevation(2.dp)) {
-                Column(Modifier.padding(18.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { BadgeText(tr("soon"), Mint, Teal); BadgeText(time.format(DateTimeFormatter.ofPattern("h:mm a", Locale.forLanguageTag(lang))), Color(0xFFF1F2F3), ink) }
-                    Spacer(Modifier.height(16.dp))
-                    Text(tr("next_appointment"), color = muted, fontSize = 13.sp)
-                    Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(next.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                        BadgeText(tr("days_left", days), Mint, Teal)
-                    }
-                    Spacer(Modifier.height(18.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(tr("allowed_days"), color = ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp); Text("${next.format(DateTimeFormatter.ofPattern("dd/MM", Locale.US))} – ${next.plusDays(2).format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US))}", color = muted, fontSize = 12.sp) }
-                    Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        (0..2).forEach { d -> val dark = MaterialTheme.colorScheme.background.luminance() < .45f; val c = if (dark) listOf(Color(0xFF075348), Color(0xFF293741), Color(0xFF49252A))[d] else listOf(Teal, Color(0xFFF0F1F2), Color(0xFFFFEDEE))[d]; val fg = if (d == 0) Color.White else if (d == 2) (if (dark) Color(0xFFFFA39B) else Danger) else ink
-                            Card(Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = c), shape = RoundedCornerShape(12.dp)) { Column(Modifier.padding(9.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(tr("day_num", d + 1), color = fg, fontSize = 11.sp); Text(next.plusDays(d.toLong()).format(DateTimeFormatter.ofPattern("dd", Locale.US)), color = fg, fontSize = 22.sp, fontWeight = FontWeight.Bold); Text(next.plusDays(d.toLong()).format(DateTimeFormatter.ofPattern("MMM", Locale.forLanguageTag(lang))), color = fg, fontSize = 11.sp); Text(listOf(tr("main_day"), tr("reminder"), tr("last_chance"))[d], color = fg, fontSize = 10.sp, textAlign = TextAlign.Center) } }
+            } else {
+                val interval = active.intervalDays
+                val time = LocalTime.of(active.hour, active.minute)
+                val days = ChronoUnit.DAYS.between(LocalDate.now(), next).coerceAtLeast(0).toInt()
+                Card(Modifier.fillMaxWidth().padding(top = 12.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(16.dp), elevation = CardDefaults.cardElevation(2.dp)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Shield, null, tint = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF86F2E4) else Teal, modifier = Modifier.size(34.dp))
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(active.name, color = ink, fontWeight = FontWeight.Bold); Text(tr("secure_sub"), color = muted, fontSize = 12.sp) }
+                            Icon(Icons.Filled.Check, null, tint = Teal, modifier = Modifier.size(25.dp))
+                        }
+                        Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = goNew) { Icon(Icons.Filled.Edit, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("edit_schedule")) }
+                            TextButton(onClick = { showDelete = true }) { Icon(Icons.Filled.Delete, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("delete_schedule"), color = MaterialTheme.colorScheme.error) }
                         }
                     }
-                    Button(onClick = { AlarmPrefs.markDone(context, next.toEpochDay()); AlarmScheduler.schedule(context); onRefresh() }, Modifier.fillMaxWidth().padding(top = 18.dp).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF78D9CD) else Teal, contentColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Navy else Color.White), shape = RoundedCornerShape(14.dp)) {
-                        Icon(Icons.Filled.Fingerprint, null); Spacer(Modifier.width(8.dp)); Text(tr("confirm_fingerprint"), fontWeight = FontWeight.Bold)
+                }
+                Card(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 20.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(20.dp), elevation = CardDefaults.cardElevation(2.dp)) {
+                    Column(Modifier.padding(18.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { BadgeText(tr("soon"), Mint, Teal); BadgeText(time.format(DateTimeFormatter.ofPattern("h:mm a", Locale.forLanguageTag(lang))), Color(0xFFF1F2F3), ink) }
+                        Spacer(Modifier.height(16.dp))
+                        Text(tr("next_appointment"), color = muted, fontSize = 13.sp)
+                        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(next.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                            BadgeText(tr("days_left", days), Mint, Teal)
+                        }
+                        Spacer(Modifier.height(18.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(tr("allowed_days"), color = ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp); Text("${next.format(DateTimeFormatter.ofPattern("dd/MM", Locale.US))} – ${next.plusDays(2).format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US))}", color = muted, fontSize = 12.sp) }
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            (0..2).forEach { d -> val dark = MaterialTheme.colorScheme.background.luminance() < .45f; val c = if (dark) listOf(Color(0xFF075348), Color(0xFF293741), Color(0xFF49252A))[d] else listOf(Teal, Color(0xFFF0F1F2), Color(0xFFFFEDEE))[d]; val fg = if (d == 0) Color.White else if (d == 2) (if (dark) Color(0xFFFFA39B) else Danger) else ink
+                                Card(Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = c), shape = RoundedCornerShape(12.dp)) { Column(Modifier.padding(9.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(tr("day_num", d + 1), color = fg, fontSize = 11.sp); Text(next.plusDays(d.toLong()).format(DateTimeFormatter.ofPattern("dd", Locale.US)), color = fg, fontSize = 22.sp, fontWeight = FontWeight.Bold); Text(next.plusDays(d.toLong()).format(DateTimeFormatter.ofPattern("MMM", Locale.forLanguageTag(lang))), color = fg, fontSize = 11.sp); Text(listOf(tr("main_day"), tr("reminder"), tr("last_chance"))[d], color = fg, fontSize = 10.sp, textAlign = TextAlign.Center) } }
+                            }
+                        }
+                        val canConfirm = AppointmentRules.canConfirm(AppointmentOccurrence(active.id, active.name, next, 0), LocalDate.now())
+                        Button(onClick = { if (AlarmPrefs.markDone(context, next.toEpochDay(), "home", active.id)) { AlarmScheduler.schedule(context); onRefresh() } }, enabled = canConfirm, Modifier.fillMaxWidth().padding(top = 18.dp).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF78D9CD) else Teal, contentColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Navy else Color.White, disabledContainerColor = bg, disabledContentColor = muted), shape = RoundedCornerShape(14.dp)) {
+                            Icon(Icons.Filled.Fingerprint, null); Spacer(Modifier.width(8.dp)); Text(tr(if (canConfirm) "confirm_fingerprint" else "not_yet"), fontWeight = FontWeight.Bold)
+                        }
+                        Text(tr("cycle_every", interval), color = muted, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp))
                     }
-                    Text(tr("cycle_every", interval), color = muted, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp))
                 }
             }
         }
     }
-    DeleteScheduleDialog(context, showDelete, { showDelete = false }) { onRefresh(); showDelete = false }
+    DeleteScheduleDialog(context, showDelete, { showDelete = false }, activeScheduleId = schedule?.id) { onRefresh(); showDelete = false }
 }
 
-@Composable private fun DeleteScheduleDialog(context: Context, visible: Boolean, dismiss: () -> Unit, deleted: () -> Unit) {
+@Composable private fun DeleteScheduleDialog(context: Context, visible: Boolean, dismiss: () -> Unit, activeScheduleId: String? = null, deleted: () -> Unit) {
     if (visible) androidx.compose.material3.AlertDialog(onDismissRequest = dismiss, title = { Text(tr("delete_schedule")) }, text = { Text(tr("delete_schedule_confirm")) },
-        confirmButton = { TextButton(onClick = { AlarmScheduler.cancelAll(context); AlarmPrefs.clearSchedule(context); AlarmScheduler.schedule(context); deleted() }) { Text(tr("delete"), color = MaterialTheme.colorScheme.error) } },
+        confirmButton = { TextButton(onClick = { AlarmScheduler.cancelAll(context); activeScheduleId?.let { AlarmPrefs.clearSchedule(context, it) }; AlarmScheduler.schedule(context); deleted() }) { Text(tr("delete"), color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton(onClick = dismiss) { Text(tr("cancel")) } })
 }
 
 @Composable private fun NewAppointment(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, onCancel: () -> Unit, onSaved: () -> Unit) {
     val context = LocalContext.current
     val dark = MaterialTheme.colorScheme.background.luminance() < .45f
-    val editing = AlarmPrefs.hasSchedule(context)
-    val originalStart = remember { if (editing) AlarmPrefs.start(context) else null }
-    val originalInterval = remember { if (editing) AlarmPrefs.interval(context) else 0 }
-    var date by remember { mutableStateOf(if (editing) AlarmPrefs.start(context) else LocalDate.now()) }
-    var hour by remember { mutableIntStateOf(if (editing) AlarmPrefs.hour(context) else AlarmPrefs.defaultHour(context)) }
-    var minute by remember { mutableIntStateOf(if (editing) AlarmPrefs.minute(context) else AlarmPrefs.defaultMinute(context)) }
-    var interval by remember { mutableIntStateOf(if (editing) AlarmPrefs.interval(context) else 28) }
-    var count by remember { mutableIntStateOf(if (editing) AlarmPrefs.count(context) else 14) }
+    val editingSchedule = remember { ScheduleRepository.active(context) }
+    val editing = editingSchedule != null
+    val originalStart = editingSchedule?.start
+    val originalInterval = editingSchedule?.intervalDays ?: 0
+    var scheduleName by remember { mutableStateOf(editingSchedule?.name ?: if (lang == "tr") "Yeni program" else if (lang == "en") "New schedule" else "جدول جديد") }
+    var date by remember { mutableStateOf(editingSchedule?.start ?: LocalDate.now()) }
+    var hour by remember { mutableIntStateOf(editingSchedule?.hour ?: AlarmPrefs.defaultHour(context)) }
+    var minute by remember { mutableIntStateOf(editingSchedule?.minute ?: AlarmPrefs.defaultMinute(context)) }
+    var interval by remember { mutableIntStateOf(editingSchedule?.intervalDays ?: 28) }
+    var count by remember { mutableIntStateOf(editingSchedule?.appointmentCount ?: 14) }
     var vibrate by remember { mutableStateOf(AlarmPrefs.vibrate(context)) }
     var soundEnabled by remember { mutableStateOf(AlarmPrefs.sound(context)) }
     var showHelp by remember { mutableStateOf(false) }
@@ -366,6 +447,7 @@ class MainActivity : ComponentActivity() {
             IconButton(onClick = { showHelp = true }) { Icon(Icons.Filled.HelpOutline, contentDescription = tr("help"), tint = if (dark) Color(0xFF86F2E4) else Teal) }
         }
         if (editing) Text(tr("edit_schedule"), color = muted, fontSize = 13.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 4.dp))
+        OutlinedTextField(value = scheduleName, onValueChange = { scheduleName = it.take(48) }, label = { Text(tr("schedule_name")) }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             InputSummaryCard(Modifier.weight(1f), surface, ink, muted, tr("set_start"), Icons.Filled.CalendarMonth, date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US))) {
                 val pickerTheme = if (dark) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert
@@ -412,10 +494,14 @@ class MainActivity : ComponentActivity() {
         }
         Button(onClick = {
             AlarmScheduler.cancelAll(context)
-            val editor = AlarmPrefs.sp(context).edit().putString("start", date.toString()).putInt("hour", hour).putInt("minute", minute).putInt("interval", interval).putInt("count", count).putBoolean("vibrate", vibrate).putBoolean("sound", soundEnabled)
-            if (originalStart != null && (originalStart != date || originalInterval != interval)) editor.remove("completed")
-            if (!editing) editor.putInt("default_hour", hour).putInt("default_minute", minute)
-            editor.apply()
+            val previous = editingSchedule
+            val completed = if (previous != null && originalStart == date && originalInterval == interval) previous.completedEpochDays else emptySet()
+            val updated = if (previous != null) previous.copy(name = scheduleName.ifBlank { tr("schedule_name") }, start = date, hour = hour, minute = minute, intervalDays = interval, appointmentCount = count, completedEpochDays = completed)
+                else ScheduleRepository.create(context, scheduleName.ifBlank { tr("schedule_name") }, date, interval, count, hour, minute)
+            ScheduleRepository.save(context, updated)
+            ScheduleRepository.setActive(context, updated.id)
+            AlarmPrefs.sp(context).edit().putBoolean("vibrate", vibrate).putBoolean("sound", soundEnabled).apply()
+            if (!editing) AlarmPrefs.sp(context).edit().putInt("default_hour", hour).putInt("default_minute", minute).apply()
             AlarmScheduler.schedule(context)
             if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) notificationLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             if (Build.VERSION.SDK_INT >= 31 && !context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms()) context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")))
@@ -431,34 +517,51 @@ class MainActivity : ComponentActivity() {
 
 @Composable private fun AppointmentsScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, refresh: Int, navigate: (String) -> Unit, onRefresh: () -> Unit) {
     val context = LocalContext.current
-    val hasSchedule = AlarmPrefs.hasSchedule(context)
-    val done = AlarmPrefs.completed(context)
-    val allDates = if (hasSchedule) (0 until AlarmPrefs.count(context)).map { AlarmPrefs.start(context).plusDays(it.toLong() * AlarmPrefs.interval(context)) } else emptyList()
-    val upcoming = allDates.filter { it.toEpochDay() !in done && it.plusDays(2) >= LocalDate.now() }
+    val schedules = ScheduleRepository.all(context)
+    var selectedId by remember(refresh) { mutableStateOf(ScheduleRepository.active(context)?.id) }
+    val selected = schedules.firstOrNull { it.id == selectedId } ?: schedules.firstOrNull()
+    val today = LocalDate.now()
+    val occurrences = selected?.let { AppointmentRules.occurrences(it.id, it.name, it.start, it.intervalDays, it.appointmentCount, it.completedEpochDays) }.orEmpty()
+    val upcoming = occurrences.filter { !it.windowEnd.isBefore(today) }
     var showDelete by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Header(tr("appointments"), Icons.Filled.CalendarMonth, ink)
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text(tr("upcoming_list"), color = ink, fontSize = 21.sp, fontWeight = FontWeight.Bold); Text(tr("appointments_sub"), color = muted, fontSize = 13.sp) }
-            if (hasSchedule) IconButton(onClick = { navigate("new") }) { Icon(Icons.Filled.Edit, tr("edit_schedule"), tint = Teal) }
+            IconButton(onClick = {
+                val created = ScheduleRepository.create(context, when (lang) { "tr" -> "Yeni program"; "en" -> "New schedule"; else -> "جدول جديد" })
+                ScheduleRepository.setActive(context, created.id)
+                AlarmPrefs.sp(context).edit().putString("draft_schedule_id", created.id).apply()
+                navigate("new")
+            }) { Icon(Icons.Filled.Add, tr("new_schedule"), tint = Teal) }
         }
-        if (hasSchedule) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { TextButton(onClick = { showDelete = true }) { Icon(Icons.Filled.Delete, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("delete_schedule"), color = MaterialTheme.colorScheme.error) } }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            if (upcoming.isEmpty()) Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
-                Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(tr(if (hasSchedule) "no_upcoming" else "no_schedule_sub"), color = muted, textAlign = TextAlign.Center)
-                    if (!hasSchedule) Button(onClick = { navigate("new") }, Modifier.padding(top = 14.dp)) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text(tr("new_fingerprint")) }
-                }
+        if (schedules.size > 1) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            schedules.forEach { item ->
+                FilterChip(selected = item.id == selected?.id, onClick = { selectedId = item.id; ScheduleRepository.setActive(context, item.id); onRefresh() }, label = { Text(item.name) }, leadingIcon = { if (item.id == selected?.id) Icon(Icons.Filled.Check, null, modifier = Modifier.size(16.dp)) })
             }
-            upcoming.forEachIndexed { index, date ->
+        }
+        if (selected != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = { ScheduleRepository.setActive(context, selected.id); navigate("new") }) { Icon(Icons.Filled.Edit, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("edit_schedule")) }
+            TextButton(onClick = { showDelete = true }) { Icon(Icons.Filled.Delete, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("delete_schedule"), color = MaterialTheme.colorScheme.error) }
+        }
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            if (selected == null) Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(tr("no_upcoming"), color = muted, textAlign = TextAlign.Center); Button(onClick = { navigate("new") }, Modifier.padding(top = 14.dp)) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(6.dp)); Text(tr("new_fingerprint")) } }
+            } else if (upcoming.isEmpty()) Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(tr("schedule_ended"), color = ink, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center); Text(tr("schedule_ended_sub"), color = muted, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp)); Button(onClick = { navigate("new") }, Modifier.padding(top = 14.dp)) { Icon(Icons.Filled.Edit, null); Spacer(Modifier.width(6.dp)); Text(tr("extend_schedule")) } }
+            }
+            upcoming.forEachIndexed { index, occurrence ->
+                val date = occurrence.baseDate
+                val state = AppointmentRules.state(occurrence, today, false)
+                val isAvailable = state == AppointmentState.AVAILABLE
                 Card(Modifier.fillMaxWidth().padding(bottom = 10.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(17.dp), elevation = CardDefaults.cardElevation(1.dp)) {
                     Column(Modifier.padding(14.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 BadgeText("${index + 1}", if (index == 0) Mint else bg, if (index == 0) Teal else muted)
-                                Column(Modifier.padding(start = 10.dp)) { Text(tr(if (index == 0) "next_cycle" else "appointment_num", index + 1), color = muted, fontSize = 12.sp); Text(date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+                                Column(Modifier.padding(start = 10.dp)) { Text(tr("schedule_name"), color = muted, fontSize = 12.sp); Text(date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
                             }
-                            BadgeText(tr(if (index == 0) "soon" else "scheduled"), if (index == 0) Mint else bg, if (index == 0) Teal else muted)
+                            BadgeText(tr(if (isAvailable) "available_now" else "scheduled"), if (isAvailable) Mint else bg, if (isAvailable) Teal else muted)
                         }
                         HorizontalDivider(Modifier.padding(vertical = 10.dp), color = bg)
                         Text("${tr("grace_window")}: ${date.format(DateTimeFormatter.ofPattern("dd/MM", Locale.US))} – ${date.plusDays(2).format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US))}", color = muted, fontSize = 12.sp)
@@ -467,41 +570,83 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    DeleteScheduleDialog(context, showDelete, { showDelete = false }) { onRefresh(); showDelete = false }
+    DeleteScheduleDialog(context, showDelete, { showDelete = false }, activeScheduleId = selected?.id) { selectedId = ScheduleRepository.active(context)?.id; onRefresh(); showDelete = false }
 }
 
 @Composable private fun HistoryScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, refresh: Int) {
     val context = LocalContext.current
-    val done = AlarmPrefs.completed(context)
+    var redraw by remember { mutableIntStateOf(0) }
+    var selectedEvent by remember { mutableStateOf<AppointmentEvent?>(null) }
+    var noteText by remember { mutableStateOf("") }
+    val schedules = ScheduleRepository.all(context)
     val today = LocalDate.now()
-    val allDates = if (AlarmPrefs.hasSchedule(context)) (0 until AlarmPrefs.count(context)).map { AlarmPrefs.start(context).plusDays(it.toLong() * AlarmPrefs.interval(context)) } else emptyList()
-    val previous = (allDates.filter { it.plusDays(2) < today || it.toEpochDay() in done } + done.mapNotNull { runCatching { LocalDate.ofEpochDay(it) }.getOrNull() }).distinct().sortedDescending()
+    val events = remember(refresh, redraw) {
+        val recorded = ScheduleRepository.events(context)
+        val eventKeys = recorded.map { it.scheduleId to it.appointmentEpochDay }.toSet()
+        val legacy = schedules.flatMap { schedule -> schedule.completedEpochDays.filter { (schedule.id to it) !in eventKeys }.map { day ->
+            AppointmentEvent(schedule.id, schedule.name, day, 0L, "legacy_history")
+        } }
+        (recorded + legacy).sortedByDescending { it.confirmedAtEpochMillis }
+    }
+    val missed = schedules.flatMap { schedule ->
+        AppointmentRules.occurrences(schedule.id, schedule.name, schedule.start, schedule.intervalDays, schedule.appointmentCount, schedule.completedEpochDays)
+            .filter { it.windowEnd.isBefore(today) }
+    }.sortedByDescending { it.baseDate }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Header(tr("history"), Icons.Filled.History, ink)
         Text(tr("history_title"), color = ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
         Text(tr("history_sub"), color = muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            if (previous.isEmpty()) Card(Modifier.fillMaxWidth().padding(top = 6.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
+            if (events.isEmpty() && missed.isEmpty()) Card(Modifier.fillMaxWidth().padding(top = 6.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
                 Text(tr("no_previous"), Modifier.fillMaxWidth().padding(24.dp), color = muted, textAlign = TextAlign.Center)
             }
-            previous.forEachIndexed { index, date ->
-                val verified = date.toEpochDay() in done
+            events.forEach { event ->
+                val date = runCatching { LocalDate.ofEpochDay(event.appointmentEpochDay) }.getOrNull() ?: return@forEach
+                val completedAt = java.time.Instant.ofEpochMilli(event.confirmedAtEpochMillis).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm", Locale.forLanguageTag(lang)))
                 Card(Modifier.fillMaxWidth().padding(bottom = 10.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(17.dp), elevation = CardDefaults.cardElevation(1.dp)) {
                     Column(Modifier.padding(14.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Column { Text(tr("appointment_num", previous.size - index), color = muted, fontSize = 12.sp); Text(date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 21.sp, fontWeight = FontWeight.Bold) }
-                            BadgeText(tr(if (verified) "completed_short" else "not_confirmed_short"), if (verified) Mint else bg, if (verified) Teal else muted)
+                            Column(Modifier.weight(1f)) { Text(event.scheduleName, color = muted, fontSize = 12.sp); Text(date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+                            BadgeText(tr("completed_short"), Mint, Teal)
                         }
-                        HorizontalDivider(Modifier.padding(vertical = 10.dp), color = bg)
-                        Text(tr(if (verified) "completed_label" else "not_confirmed_label"), color = muted, fontSize = 12.sp)
+                        HorizontalDivider(Modifier.padding(vertical = 9.dp), color = bg)
+                        if (event.confirmedAtEpochMillis > 0L) {
+                            Text("${tr("confirmed_at")}: $completedAt", color = muted, fontSize = 12.sp)
+                            Text("${tr("confirmation_method")}: ${methodName(event.method, lang)}", color = muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                        } else Text(tr("legacy_history_note"), color = muted, fontSize = 12.sp)
+
+                        if (event.note.isNotBlank()) Text("${tr("note")}: ${event.note}", color = ink, fontSize = 13.sp, modifier = Modifier.padding(top = 5.dp))
+                        TextButton(onClick = { selectedEvent = event; noteText = event.note }) { Text(tr(if (event.note.isBlank()) "add_note" else "edit_note")) }
+                    }
+                }
+            }
+            if (missed.isNotEmpty()) Text(tr("not_confirmed_short"), color = ink, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp))
+            missed.forEach { occurrence ->
+                Card(Modifier.fillMaxWidth().padding(bottom = 10.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(17.dp)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Column { Text(occurrence.scheduleName, color = muted, fontSize = 12.sp); Text(occurrence.baseDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold) }; BadgeText(tr("not_confirmed_short"), bg, muted) }
+                        Text(tr("not_confirmed_label"), color = muted, fontSize = 12.sp, modifier = Modifier.padding(top = 7.dp))
                     }
                 }
             }
         }
     }
+    selectedEvent?.let { event ->
+        androidx.compose.material3.AlertDialog(onDismissRequest = { selectedEvent = null }, title = { Text(tr("note")) }, text = {
+            OutlinedTextField(value = noteText, onValueChange = { noteText = it.take(280) }, label = { Text(tr("note_optional")) }, minLines = 2, maxLines = 4)
+        }, confirmButton = { TextButton(onClick = { ScheduleRepository.updateEventNote(context, event.confirmedAtEpochMillis, noteText); selectedEvent = null; redraw++ }) { Text(tr("save")) } }, dismissButton = { TextButton(onClick = { selectedEvent = null }) { Text(tr("cancel")) } })
+    }
 }
 
-@Composable private fun SettingsScreen(lang: String, theme: String, dark: Boolean, surface: Color, ink: Color, muted: Color, bg: Color, setLang: (String) -> Unit, setTheme: (String) -> Unit) {
+private fun methodName(method: String, lang: String): String = when (method) {
+    "legacy_history" -> when (lang) { "tr" -> "Eski geçmiş kaydı"; "en" -> "Earlier history record"; else -> "سجل محفوظ من إصدار سابق" }
+    "ringing_screen" -> when (lang) { "tr" -> "Alarm ekranı"; "en" -> "Ringing screen"; else -> "شاشة الرنين" }
+    "notification" -> when (lang) { "tr" -> "Bildirim"; "en" -> "Notification"; else -> "الإشعار" }
+    "widget" -> when (lang) { "tr" -> "Widget"; "en" -> "Widget"; else -> "الودجت" }
+    else -> when (lang) { "tr" -> "Ana sayfa"; "en" -> "Home screen"; else -> "الشاشة الرئيسية" }
+}
+
+@Composable private fun SettingsScreen(lang: String, theme: String, dark: Boolean, surface: Color, ink: Color, muted: Color, bg: Color, setLang: (String) -> Unit, setTheme: (String) -> Unit, openSetup: () -> Unit) {
     val context = LocalContext.current
     var panel by remember { mutableStateOf("") }
     var sound by remember { mutableStateOf(AlarmPrefs.sound(context)) }
@@ -534,6 +679,8 @@ class MainActivity : ComponentActivity() {
         Spacer(Modifier.height(12.dp))
         SettingsOption(surface, ink, muted, Icons.Filled.Language, tr("language"), tr("language_sub"), when (lang) { "tr" -> "Türkçe"; "en" -> "English"; else -> "العربية" }) { panel = "language" }
         SettingsOption(surface, ink, muted, Icons.Filled.Palette, tr("appearance"), tr("appearance_sub"), when (theme) { "dark" -> tr("dark"); "light" -> tr("light"); else -> tr("system") }) { panel = "theme" }
+        SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("setup_assistant"), tr("setup_assistant_sub"), tr("manage"), openSetup)
+        SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("setup_assistant"), tr("setup_assistant_sub"), tr("manage"), openSetup)
         SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("alarm_options"), tr("alarm_settings_sub"), tr("customized")) { panel = "alarm" }
         SettingsOption(surface, ink, muted, Icons.Filled.Shield, tr("permissions"), tr("permissions_sub"), tr("manage")) { panel = "permissions" }
         SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}") { panel = "about" }
@@ -735,28 +882,45 @@ class MainActivity : ComponentActivity() {
     }
     val added = when (l) {
         "en" -> mapOf(
-            "no_schedule_title" to "No fingerprint schedule yet", "no_schedule_sub" to "Your appointments will appear here after you create and save a schedule.", "edit_schedule" to "Edit schedule", "delete_schedule" to "Delete schedule", "delete_schedule_confirm" to "Delete this schedule and its saved completion history? Pending alarms will also be cancelled.", "delete" to "Delete", "appointments_sub" to "Upcoming fingerprint dates in your saved schedule", "next_cycle" to "Next scheduled appointment", "cycle_every" to "Repeats every $n days",
+            "no_schedule_title" to "No fingerprint schedule yet", "no_schedule_sub" to "Your appointments will appear here after you create and save a schedule.", "edit_schedule" to "Edit schedule", "delete_schedule" to "Delete schedule", "delete_schedule_confirm" to "Delete this schedule? Its pending alarms will be cancelled; already recorded history will remain.", "delete" to "Delete", "appointments_sub" to "Upcoming fingerprint dates in your saved schedule", "next_cycle" to "Next scheduled appointment", "cycle_every" to "Repeats every $n days",
             "help" to "Help", "help_instructions_title" to "Setup instructions", "help_instructions_intro" to "Enter the date of your first or next fingerprint appointment, choose the schedule interval, and set the reminder time.", "help_step_date" to "Choose the first appointment date shown in GöcBil.", "help_step_time" to "Choose when the alarm should ring.", "help_step_interval" to "Choose every 28 days or weekly.", "help_step_sound" to "Choose an alarm ringtone and vibration preference.", "help_step_save" to "Save to create the future appointment reminders.", "understood" to "Got it",
             "choose_language" to "Choose language", "alarm_options" to "Alarm settings", "alarm_settings_sub" to "Sound, vibration, timing and reminders", "permissions_sub" to "Notifications, exact alarms, overlay and battery", "alarm_sound" to "Alarm sound", "default_alarm_time" to "Default alarm time", "auto_stop_after" to "Automatically stop after", "snooze_duration" to "Snooze duration", "high_priority" to "Highest priority alert", "remind_day_before" to "Notify one day before", "repeat_until_done" to "Repeat on appointment day until confirmed", "remind_next_day" to "Reminder on the second day", "off" to "Off", "minutes_short" to "min", "customized" to "Custom",
             "app_name" to "Basma Alarm", "app_short_description" to "A personal organizer for periodic fingerprint appointments and reminders.", "developer_name" to "Yasir Abu Alaa", "developer_intro" to "App and website developer.", "developer_whatsapp_sub" to "Direct WhatsApp message", "developer_telegram_sub" to "Telegram profile and updates", "developer_facebook_sub" to "Facebook page", "permissions_note" to "Alarm behavior depends on Android permissions and device background restrictions. Enable the required items for reliable reminders.",
             "disclaimer_body" to "This app is an independent, unofficial personal organizer and reminder tool. It does not represent any government authority or official office. Always verify your actual appointment dates in the GöcBil app."
         )
         "tr" -> mapOf(
-            "no_schedule_title" to "Henüz parmak izi programı yok", "no_schedule_sub" to "Randevularınız, bir program oluşturup kaydettikten sonra burada görünür.", "edit_schedule" to "Programı düzenle", "delete_schedule" to "Programı sil", "delete_schedule_confirm" to "Bu program ve kayıtlı tamamlanma geçmişi silinsin mi? Bekleyen alarmlar da iptal edilir.", "delete" to "Sil", "appointments_sub" to "Kaydedilen programınızdaki yaklaşan parmak izi tarihleri", "next_cycle" to "Sıradaki randevu", "cycle_every" to "$n günde bir tekrarlanır",
+            "no_schedule_title" to "Henüz parmak izi programı yok", "no_schedule_sub" to "Randevularınız, bir program oluşturup kaydettikten sonra burada görünür.", "edit_schedule" to "Programı düzenle", "delete_schedule" to "Programı sil", "delete_schedule_confirm" to "Bu program silinsin mi? Bekleyen alarmlar iptal edilir; kaydedilmiş geçmiş korunur.", "delete" to "Sil", "appointments_sub" to "Kaydedilen programınızdaki yaklaşan parmak izi tarihleri", "next_cycle" to "Sıradaki randevu", "cycle_every" to "$n günde bir tekrarlanır",
             "help" to "Yardım", "help_instructions_title" to "Kurulum talimatları", "help_instructions_intro" to "İlk veya sıradaki parmak izi randevunuzun tarihini girin, aralığı ve alarm saatini seçin.", "help_step_date" to "GöcBil uygulamasında gösterilen ilk randevu tarihini seçin.", "help_step_time" to "Alarmın çalacağı saati seçin.", "help_step_interval" to "28 günde bir veya haftalık seçin.", "help_step_sound" to "Alarm zil sesini ve titreşim tercihini seçin.", "help_step_save" to "Gelecek randevu hatırlatmalarını oluşturmak için kaydedin.", "understood" to "Anladım",
             "choose_language" to "Dil seçin", "alarm_options" to "Alarm ayarları", "alarm_settings_sub" to "Ses, titreşim, saat ve hatırlatmalar", "permissions_sub" to "Bildirimler, kesin alarmlar, üstte gösterim ve pil", "alarm_sound" to "Alarm sesi", "default_alarm_time" to "Varsayılan alarm saati", "auto_stop_after" to "Otomatik durdurma süresi", "snooze_duration" to "Erteleme süresi", "high_priority" to "En yüksek öncelikli uyarı", "remind_day_before" to "Bir gün önceden bildir", "repeat_until_done" to "Onaylanana kadar randevu gününde tekrarla", "remind_next_day" to "İkinci gün hatırlatması", "off" to "Kapalı", "minutes_short" to "dk", "customized" to "Özel",
             "app_name" to "Parmak İzi Alarmı", "app_short_description" to "Düzenli parmak izi randevuları ve hatırlatmaları için kişisel bir düzenleyici.", "developer_name" to "Yasir Abu Alaa", "developer_intro" to "Uygulama ve web sitesi geliştiricisi.", "developer_whatsapp_sub" to "Doğrudan WhatsApp mesajı", "developer_telegram_sub" to "Telegram profili ve güncellemeler", "developer_facebook_sub" to "Facebook sayfası", "permissions_note" to "Alarmın çalışması Android izinlerine ve cihazın arka plan kısıtlamalarına bağlıdır. Hatırlatmaların güvenilir olması için gerekli izinleri açın.",
             "disclaimer_body" to "Bu uygulama bağımsız ve resmi olmayan kişisel bir düzenleme ve hatırlatma aracıdır. Herhangi bir devlet kurumunu veya resmi daireyi temsil etmez. Gerçek randevu tarihlerinizi her zaman GöcBil uygulamasından doğrulayın."
         )
         else -> mapOf(
-            "no_schedule_title" to "لا يوجد جدول بصمة بعد", "no_schedule_sub" to "ستظهر مواعيدك هنا بعد إنشاء جدول وحفظه.", "edit_schedule" to "تعديل الجدول", "delete_schedule" to "حذف الجدول", "delete_schedule_confirm" to "هل تريد حذف هذا الجدول وسجل الإنجاز المحفوظ؟ سيتم إلغاء التنبيهات القادمة أيضاً.", "delete" to "حذف", "appointments_sub" to "مواعيد البصمة القادمة في جدولك المحفوظ", "next_cycle" to "موعد البصمة القادم", "cycle_every" to "يتكرر كل $n يوماً",
+            "no_schedule_title" to "لا يوجد جدول بصمة بعد", "no_schedule_sub" to "ستظهر مواعيدك هنا بعد إنشاء جدول وحفظه.", "edit_schedule" to "تعديل الجدول", "delete_schedule" to "حذف الجدول", "delete_schedule_confirm" to "هل تريد حذف هذا الجدول؟ ستُلغى تنبيهاته القادمة وتبقى أحداث السجل المحفوظة.", "delete" to "حذف", "appointments_sub" to "مواعيد البصمة القادمة في جدولك المحفوظ", "next_cycle" to "موعد البصمة القادم", "cycle_every" to "يتكرر كل $n يوماً",
             "help" to "مساعدة", "help_instructions_title" to "تعليمات الإعداد", "help_instructions_intro" to "أدخل تاريخ أول بصمة أو البصمة القادمة، وحدد دورة التكرار ووقت التنبيه.", "help_step_date" to "حدد تاريخ أول بصمة معتمد في تطبيق GöcBil.", "help_step_time" to "اختر وقت التنبيه.", "help_step_interval" to "اختر دورة كل 28 يوماً أو أسبوعية.", "help_step_sound" to "اختر نغمة التنبيه المناسبة وحدد الاهتزاز.", "help_step_save" to "احفظ الجدول لإنشاء المواعيد القادمة والتنبيهات تلقائياً.", "understood" to "فهمت ذلك",
             "choose_language" to "اختر اللغة", "alarm_options" to "إعدادات التنبيه", "alarm_settings_sub" to "الصوت والاهتزاز والوقت والتذكيرات", "permissions_sub" to "الإشعارات والمنبهات الدقيقة والظهور والبطارية", "alarm_sound" to "صوت التنبيه", "default_alarm_time" to "وقت التنبيه الافتراضي", "auto_stop_after" to "الإيقاف التلقائي بعد", "snooze_duration" to "مدة الغفوة", "high_priority" to "تنبيه أولوية قصوى", "remind_day_before" to "إشعار قبل بيوم", "repeat_until_done" to "تكرار تنبيه يوم البصمة حتى التوثيق", "remind_next_day" to "تذكير في اليوم الثاني", "off" to "إيقاف", "minutes_short" to "د", "customized" to "مخصّص",
             "app_name" to "منبه بصمة", "app_short_description" to "أداة شخصية لتنظيم مواعيد البصمة الدورية والتذكير بها.", "developer_name" to "ياسر أبو علاء", "developer_intro" to "مختص ببرمجة التطبيقات والمواقع الإلكترونية.", "developer_whatsapp_sub" to "مراسلة مباشرة وسريعة عبر واتساب", "developer_telegram_sub" to "حساب تلجرام والتحديثات", "developer_facebook_sub" to "صفحة المطور على فيسبوك", "permissions_note" to "يعتمد عمل التنبيه على أذونات Android وقيود تشغيل الخلفية في الجهاز. فعّل الأذونات اللازمة لضمان وصول التذكيرات.",
             "disclaimer_body" to "هذا التطبيق هو أداة تنظيم ومساعد تذكير شخصي مستقل غير رسمي، ولا يمثل أي جهة حكومية أو دائرة رسمية، يرجى التحقق دائما من المواعيد الحقيقية في تطبيق GöcBil."
         )
     }
-    return added[k] ?: extra[k] ?: values[k] ?: k
+    val approved = when (l) {
+        "en" -> mapOf(
+            "legacy_history_note" to "Saved as complete before detailed event logging was added; no exact confirmation time was stored.", "setup_assistant" to "Reminder setup assistant", "setup_assistant_sub" to "Review alarm permissions and settings", "schedule_name" to "Schedule name", "new_schedule" to "New schedule", "schedule_ended" to "This schedule has ended", "schedule_ended_sub" to "All configured appointments are complete. Edit the schedule to add more cycles, or create another schedule.", "extend_schedule" to "Extend schedule", "not_yet" to "Not available yet", "available_now" to "Available now",
+            "confirmed_at" to "Confirmed at", "confirmation_method" to "Confirmation method", "note" to "Note", "note_optional" to "Optional note", "add_note" to "Add note", "edit_note" to "Edit note",
+            "reliability_title" to "Alarm reliability status", "reliability_ready" to "Required alarm permissions are available", "reliability_no_schedule" to "No schedule saved", "reliability_exact_missing" to "Exact alarms are not allowed", "reliability_notifications_missing" to "Notifications are disabled", "reliability_fullscreen_missing" to "Full-screen alarm permission is off", "reliability_next" to "Next alarm", "reliability_last_schedule" to "Last rescheduled", "reliability_caveat" to "Device or manufacturer background limits may still affect delivery."
+        )
+        "tr" -> mapOf(
+            "legacy_history_note" to "Ayrıntılı kayıt eklenmeden önce tamamlandı olarak saklanmış; kesin onay saati bulunmuyor.", "setup_assistant" to "Alarm kurulum yardımcısı", "setup_assistant_sub" to "Alarm izinlerini ve ayarlarını gözden geçirin", "schedule_name" to "Program adı", "new_schedule" to "Yeni program", "schedule_ended" to "Bu program sona erdi", "schedule_ended_sub" to "Belirlenen randevular tamamlandı. Döngü eklemek için programı düzenleyin veya yeni bir program oluşturun.", "extend_schedule" to "Programı uzat", "not_yet" to "Henüz uygun değil", "available_now" to "Şimdi uygun",
+            "confirmed_at" to "Onay zamanı", "confirmation_method" to "Onay yöntemi", "note" to "Not", "note_optional" to "İsteğe bağlı not", "add_note" to "Not ekle", "edit_note" to "Notu düzenle",
+            "reliability_title" to "Alarm güvenilirlik durumu", "reliability_ready" to "Gerekli alarm izinleri kullanılabilir", "reliability_no_schedule" to "Kayıtlı program yok", "reliability_exact_missing" to "Kesin alarmlara izin verilmedi", "reliability_notifications_missing" to "Bildirimler kapalı", "reliability_fullscreen_missing" to "Tam ekran alarm izni kapalı", "reliability_next" to "Sonraki alarm", "reliability_last_schedule" to "Son yeniden planlama", "reliability_caveat" to "Cihaz veya üretici arka plan kısıtlamaları teslimatı yine etkileyebilir."
+        )
+        else -> mapOf(
+            "legacy_history_note" to "سُجل كمكتمل في إصدار سابق قبل حفظ تفاصيل الأحداث؛ لا يتوفر وقت تأكيد دقيق.", "setup_assistant" to "مساعد إعداد التنبيهات", "setup_assistant_sub" to "مراجعة أذونات التنبيه وإعداداته", "schedule_name" to "اسم الجدول", "new_schedule" to "جدول جديد", "schedule_ended" to "انتهت مواعيد هذا الجدول", "schedule_ended_sub" to "اكتملت جميع المواعيد المحددة. عدّل الجدول لإضافة دورات، أو أنشئ جدولاً آخر.", "extend_schedule" to "تمديد الجدول", "not_yet" to "لم يحن الموعد بعد", "available_now" to "الموعد متاح الآن",
+            "confirmed_at" to "وقت التأكيد", "confirmation_method" to "طريقة التأكيد", "note" to "ملاحظة", "note_optional" to "ملاحظة اختيارية", "add_note" to "إضافة ملاحظة", "edit_note" to "تعديل الملاحظة",
+            "reliability_title" to "حالة موثوقية التنبيهات", "reliability_ready" to "الأذونات الأساسية للتنبيه متاحة", "reliability_no_schedule" to "لا يوجد جدول محفوظ", "reliability_exact_missing" to "المنبهات الدقيقة غير مسموحة", "reliability_notifications_missing" to "الإشعارات معطلة", "reliability_fullscreen_missing" to "إذن التنبيه بملء الشاشة معطل", "reliability_next" to "التنبيه التالي", "reliability_last_schedule" to "آخر إعادة جدولة", "reliability_caveat" to "قد تؤثر قيود الخلفية الخاصة بالشركة المصنّعة على وصول التنبيه."
+        )
+    }
+    return approved[k] ?: added[k] ?: extra[k] ?: values[k] ?: k
 }
 
 @Composable internal fun currentLanguage(): String = AlarmPrefs.language(LocalContext.current)
