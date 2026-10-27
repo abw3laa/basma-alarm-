@@ -27,7 +27,7 @@
 
 أضفها من إعدادات GitHub Actions Secrets في المستودع. لا تضع ملف keystore أو كلمات المرور في Git. يجب استخدام **ملف التوقيع نفسه** لكل إصدار لاحق، وإلا سيرفض Android التثبيت فوق النسخة السابقة. ينتج تشغيل Actions ملف Release ضمن artifact باسم `basma-release-signed`.
 
-الإصدار الجاري بناؤه: `versionName=1.3.3` و`versionCode=7`. بيان التحديث المنشور حالياً يشير إلى `1.3.2` و`versionCode=6`؛ بعد رفع APK الجديد على MediaFire يجب تحديث بيانات المستودع `abw3laa/basma-alarm-updates` إلى `versionCode=7` ورابط APK الجديد.
+آخر إصدار عام هو `versionName=1.3.3` و`versionCode=7`. يجري اختبار الإصلاحات على مرشح `versionName=1.3.4` و`versionCode=8` في فرع منفصل، ولم يُنشر بعد. بيان `abw3laa/basma-alarm-updates` يبقى على الإصدار العام 1.3.3 إلى أن يُختبر المرشح ويُعتمد ويُرفع APK النهائي على MediaFire.
 
 ## التحديثات
 

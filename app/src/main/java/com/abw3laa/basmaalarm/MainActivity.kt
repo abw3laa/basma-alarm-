@@ -702,7 +702,7 @@ private fun methodName(method: String, lang: String): String = when (method) {
         SettingsOption(surface, ink, muted, Icons.Filled.Palette, tr("appearance"), tr("appearance_sub"), when (theme) { "dark" -> tr("dark"); "light" -> tr("light"); else -> tr("system") }) { panel = "theme" }
         SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("setup_assistant"), tr("setup_assistant_sub"), tr("manage"), openSetup)
         SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("alarm_options"), tr("alarm_settings_sub"), tr("customized")) { panel = "alarm" }
-        SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}") { panel = "about" }
+        SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.4"}") { panel = "about" }
         SettingsOption(surface, ink, muted, Icons.Filled.Fingerprint, tr("about_developer"), tr("developer_sub"), "") { panel = "developer" }
     }
     if (panel.isNotEmpty()) androidx.compose.material3.AlertDialog(
@@ -746,7 +746,7 @@ private fun methodName(method: String, lang: String): String = when (method) {
                             Text(tr("app_name"), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
                             Text(tr("app_short_description"), color = muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
                             Text(tr("disclaimer_body"), color = muted, fontSize = 12.sp, lineHeight = 19.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
-                            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.4"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                         }
                     }
                     "developer" -> {
