@@ -152,7 +152,17 @@ class MainActivity : ComponentActivity() {
         installAfterDownload = true
         updatePollAttempts = 0
         Toast.makeText(this, updateText("التحديث قيد التنزيل. سيبدأ التثبيت عند اكتماله.", "Güncelleme indiriliyor. Tamamlanınca kurulum başlayacak.", "The update is downloading. Installation will start when it finishes."), Toast.LENGTH_LONG).show()
-        pollUpdate(info)
+        UpdateManager.ensureDownloaded(this, info) { file, state ->
+            if (file != null) {
+                installAfterDownload = false
+                pendingApk = file
+                installOrRequestPermission(file)
+            } else if (state == "downloading") pollUpdate(info)
+            else {
+                installAfterDownload = false
+                Toast.makeText(this, updateText("تعذر بدء تنزيل التحديث. تحقق من رابط MediaFire واتصل بالإنترنت.", "Güncelleme indirilemedi. MediaFire bağlantısını ve interneti kontrol edin.", "The update could not be downloaded. Check the MediaFire link and your connection."), Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun pollUpdate(info: UpdateInfo) {
@@ -166,6 +176,9 @@ class MainActivity : ComponentActivity() {
                     installAfterDownload = false
                     pendingApk = file
                     installOrRequestPermission(file)
+                } else if (UpdateManager.hasTerminalFailure(this, info)) {
+                    installAfterDownload = false
+                    Toast.makeText(this, updateText("تعذر بدء تنزيل التحديث. تحقق من رابط MediaFire واتصل بالإنترنت.", "Güncelleme indirilemedi. MediaFire bağlantısını ve interneti kontrol edin.", "The update could not be downloaded. Check the MediaFire link and your connection."), Toast.LENGTH_LONG).show()
                 } else if (updatePollAttempts < 240) updateHandler.postDelayed({ pollUpdate(info) }, 2500)
                 else {
                     installAfterDownload = false
@@ -285,7 +298,11 @@ class MainActivity : ComponentActivity() {
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Header(label("إعداد التنبيهات", "Alarm kurulumu", "Reminder setup"), Icons.Filled.NotificationsActive, ink)
         Text(label("راجع الإعدادات الأساسية حتى يعمل التنبيه بأفضل شكل. الظهور فوق التطبيقات واستثناء البطارية إعدادان اختياريان حسب رغبتك وهاتفك.", "Alarmların daha güvenilir çalışması için temel ayarları kontrol edin. Üstte gösterim ve pil istisnası isteğe bağlıdır.", "Review the key settings for reliable reminders. Overlay and battery exemption are optional and depend on your device."), color = muted, modifier = Modifier.padding(vertical = 8.dp))
-        PermissionEntry(label("الإشعارات", "Bildirimler", "Notifications"), notificationOk) { open(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }
+        PermissionEntry(label("الإشعارات", "Bildirimler", "Notifications"), notificationOk) {
+            val notificationIntent = if (Build.VERSION.SDK_INT >= 26) Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
+            open(notificationIntent)
+        }
         PermissionEntry(label("المنبهات الدقيقة", "Kesin alarmlar", "Exact alarms"), exactOk) { if (Build.VERSION.SDK_INT >= 31) open(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))) }
         PermissionEntry(label("واجهة ملء الشاشة على القفل", "Tam ekran alarm", "Full-screen alarm"), fullOk) { if (Build.VERSION.SDK_INT >= 34) open(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}"))) }
         PermissionEntry(label("الظهور فوق التطبيقات (اختياري)", "Diğer uygulamaların üzerinde (isteğe bağlı)", "Display over other apps (optional)"), overlayOk) { open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) }
@@ -391,7 +408,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         val canConfirm = AppointmentRules.canConfirm(AppointmentOccurrence(active.id, active.name, next, 0), LocalDate.now())
-                        Button(onClick = { if (AlarmPrefs.markDone(context, next.toEpochDay(), "home", active.id)) { AlarmScheduler.schedule(context); onRefresh() } }, enabled = canConfirm, Modifier.fillMaxWidth().padding(top = 18.dp).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF78D9CD) else Teal, contentColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Navy else Color.White, disabledContainerColor = bg, disabledContentColor = muted), shape = RoundedCornerShape(14.dp)) {
+                        Button(onClick = { if (AlarmPrefs.markDone(context, next.toEpochDay(), "home", active.id)) { AlarmScheduler.schedule(context); onRefresh() } }, enabled = canConfirm, modifier = Modifier.fillMaxWidth().padding(top = 18.dp).height(52.dp), colors = ButtonDefaults.buttonColors(containerColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF78D9CD) else Teal, contentColor = if (MaterialTheme.colorScheme.background.luminance() < .45f) Navy else Color.White, disabledContainerColor = bg, disabledContentColor = muted), shape = RoundedCornerShape(14.dp)) {
                             Icon(Icons.Filled.Fingerprint, null); Spacer(Modifier.width(8.dp)); Text(tr(if (canConfirm) "confirm_fingerprint" else "not_yet"), fontWeight = FontWeight.Bold)
                         }
                         Text(tr("cycle_every", interval), color = muted, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp))
@@ -424,6 +441,7 @@ class MainActivity : ComponentActivity() {
     var count by remember { mutableIntStateOf(editingSchedule?.appointmentCount ?: 14) }
     var vibrate by remember { mutableStateOf(AlarmPrefs.vibrate(context)) }
     var soundEnabled by remember { mutableStateOf(AlarmPrefs.sound(context)) }
+    val fallbackName = tr("schedule_name")
     var showHelp by remember { mutableStateOf(false) }
     val defaultSoundText = tr("default_sound")
     val silentText = tr("silent")
@@ -496,8 +514,8 @@ class MainActivity : ComponentActivity() {
             AlarmScheduler.cancelAll(context)
             val previous = editingSchedule
             val completed = if (previous != null && originalStart == date && originalInterval == interval) previous.completedEpochDays else emptySet()
-            val updated = if (previous != null) previous.copy(name = scheduleName.ifBlank { tr("schedule_name") }, start = date, hour = hour, minute = minute, intervalDays = interval, appointmentCount = count, completedEpochDays = completed)
-                else ScheduleRepository.create(context, scheduleName.ifBlank { tr("schedule_name") }, date, interval, count, hour, minute)
+            val updated = if (previous != null) previous.copy(name = scheduleName.ifBlank { fallbackName }, start = date, hour = hour, minute = minute, intervalDays = interval, appointmentCount = count, completedEpochDays = completed)
+                else ScheduleRepository.create(context, scheduleName.ifBlank { fallbackName }, date, interval, count, hour, minute)
             ScheduleRepository.save(context, updated)
             ScheduleRepository.setActive(context, updated.id)
             AlarmPrefs.sp(context).edit().putBoolean("vibrate", vibrate).putBoolean("sound", soundEnabled).apply()

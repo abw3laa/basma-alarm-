@@ -95,6 +95,11 @@ object ScheduleRepository {
 
     fun markCompleted(c: Context, scheduleId: String, baseEpochDay: Long, method: String, note: String = ""): Boolean {
         val schedule = get(c, scheduleId) ?: return false
+        val isScheduledDate = (0 until schedule.appointmentCount).any { index ->
+            schedule.start.plusDays(index.toLong() * schedule.intervalDays).toEpochDay() == baseEpochDay
+        }
+        val occurrence = AppointmentOccurrence(schedule.id, schedule.name, LocalDate.ofEpochDay(baseEpochDay), 0)
+        if (!isScheduledDate || !AppointmentRules.canConfirm(occurrence, LocalDate.now())) return false
         if (baseEpochDay in schedule.completedEpochDays) return false
         val updated = schedule.copy(completedEpochDays = schedule.completedEpochDays + baseEpochDay)
         save(c, updated)
