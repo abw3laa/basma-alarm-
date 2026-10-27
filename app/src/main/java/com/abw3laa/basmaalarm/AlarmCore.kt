@@ -155,14 +155,33 @@ object AlarmScheduler {
                 if (day == 1 && !AlarmPrefs.remindSecondDay(c)) continue
                 val date = appointment.baseDate.plusDays(day.toLong())
                 val at = date.atTime(schedule.hour, schedule.minute).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                if (at > now) pending(c, schedule, base, date.toEpochDay(), day + 1)?.let { setAlarm(c, manager, at, it) }
+                if (at > now) pending(c, schedule, base, date.toEpochDay(), day + 1)?.let { setAlarm(c, manager, at, it, schedule, base, day + 1) }
             }
         }
     }
 
-    private fun setAlarm(c: Context, manager: AlarmManager, at: Long, pi: PendingIntent) {
-        if (Build.VERSION.SDK_INT >= 31 && !manager.canScheduleExactAlarms()) manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
-        else manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+    private fun setAlarm(c: Context, manager: AlarmManager, at: Long, pi: PendingIntent, schedule: FingerprintSchedule? = null, baseDay: Long = 0L, windowDay: Int = 1) {
+        val exactAllowed = Build.VERSION.SDK_INT < 31 || runCatching { manager.canScheduleExactAlarms() }.getOrDefault(false)
+        if (!exactAllowed) {
+            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            return
+        }
+        try {
+            if (schedule == null) {
+                manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            } else {
+                val showIntent = Intent(c, MainActivity::class.java)
+                    .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    .setData(Uri.parse("basmaalarm://scheduled-alarm"))
+                val show = PendingIntent.getActivity(
+                    c, 9000, showIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                manager.setAlarmClock(AlarmManager.AlarmClockInfo(at, show), pi)
+            }
+        } catch (_: SecurityException) {
+            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        }
     }
 
     fun scheduleFingerprintRepeat(c: Context, baseDay: Long, scheduleId: String? = null) {
@@ -174,7 +193,7 @@ object AlarmScheduler {
         val at = now.plusMinutes(AlarmPrefs.snoozeMinutes(c).toLong()).withSecond(0).withNano(0)
         if (at.toLocalDate() != baseDate) return
         val pi = pending(c, schedule, baseDay, baseDay, 1, ACTION_FIRE, repeated = true) ?: return
-        setAlarm(c, c.getSystemService(AlarmManager::class.java), at.toInstant().toEpochMilli(), pi)
+        setAlarm(c, c.getSystemService(AlarmManager::class.java), at.toInstant().toEpochMilli(), pi, schedule, baseDay, 1)
     }
 
     fun snooze(c: Context, baseDay: Long, windowDay: Int, scheduleId: String? = null) {
@@ -185,7 +204,7 @@ object AlarmScheduler {
         }
         val at = System.currentTimeMillis() + AlarmPrefs.snoozeMinutes(c) * 60_000L
         val pi = pending(c, schedule, baseDay, LocalDate.now().toEpochDay(), windowDay, ACTION_FIRE, snooze = true) ?: return
-        setAlarm(c, c.getSystemService(AlarmManager::class.java), at, pi)
+        setAlarm(c, c.getSystemService(AlarmManager::class.java), at, pi, schedule, baseDay, windowDay)
     }
 
     fun nextBase(c: Context, scheduleId: String? = null): LocalDate? {
@@ -244,6 +263,7 @@ class BootReceiver : BroadcastReceiver() {
 
 class AlarmPlaybackService : Service() {
     private var ringtone: Ringtone? = null
+    private var playbackWakeLock: android.os.PowerManager.WakeLock? = null
     private var alarmOverlay: View? = null
     private var overlayManager: WindowManager? = null
     private val handler = Handler(Looper.getMainLooper())
@@ -261,6 +281,7 @@ class AlarmPlaybackService : Service() {
         startForeground(NOTIFICATION_ID_BASE + schedule.notificationId, buildNotification(this, base, day, scheduleId))
         handler.removeCallbacks(autoStop)
         stopPlayback()
+        if (command != ACTION_MUTE) acquirePlaybackWakeLock()
         if (command != ACTION_MUTE && AlarmPrefs.sound(this)) {
             runCatching {
                 val uri = AlarmPrefs.soundUri(this)?.let { Uri.parse(it) } ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
@@ -284,6 +305,19 @@ class AlarmPlaybackService : Service() {
         handler.removeCallbacks(autoStop)
         ringtone?.stop(); ringtone = null
         runCatching { val v = if (Build.VERSION.SDK_INT >= 31) getSystemService(VibratorManager::class.java).defaultVibrator else getSystemService(Vibrator::class.java); v.cancel() }
+        val lock = playbackWakeLock
+        playbackWakeLock = null
+        if (lock?.isHeld == true) runCatching { lock.release() }
+    }
+    private fun acquirePlaybackWakeLock() {
+        runCatching {
+            val power = getSystemService(android.os.PowerManager::class.java) ?: return
+            val lock = power.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "$packageName:alarm-playback").apply { setReferenceCounted(false) }
+            val autoStopMinutes = AlarmPrefs.autoStopMinutes(this)
+            val timeout = if (autoStopMinutes > 0) (autoStopMinutes.toLong() + 2L) * 60_000L else 2L * 60L * 60L * 1_000L
+            lock.acquire(timeout)
+            playbackWakeLock = lock
+        }
     }
     private fun showAlarmOverlay(base: Long, day: Int, scheduleId: String) {
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) return

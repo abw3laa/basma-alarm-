@@ -253,7 +253,7 @@ class MainActivity : ComponentActivity() {
                             setLang = { lang = it; AlarmPrefs.sp(context).edit().putString("language", it).apply() },
                             setTheme = { theme = it; AlarmPrefs.sp(context).edit().putString("theme", it).apply() },
                             openSetup = { page = "setup" })
-                        else -> HomeScreen(lang, surface, ink, muted, bg, refresh, goNew = { page = "new" }, onRefresh = { refresh++ }, openSettings = { page = "settings" })
+                        else -> HomeScreen(lang, surface, ink, muted, bg, refresh, goNew = { page = "new" }, onRefresh = { refresh++ })
                     }
                 }
             }
@@ -290,6 +290,8 @@ class MainActivity : ComponentActivity() {
     var refresh by remember { mutableIntStateOf(0) }
     val exactOk = remember(refresh) { Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms() }
     val notificationOk = remember(refresh) { Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled() }
+    val notificationPermissionGranted = remember(refresh) { Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
     val overlayOk = remember(refresh) { Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(context) }
     val fullOk = remember(refresh) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
     val batteryOk = remember(refresh) { Build.VERSION.SDK_INT < 23 || context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
@@ -297,11 +299,15 @@ class MainActivity : ComponentActivity() {
     fun label(ar: String, tr: String, en: String) = when (lang) { "tr" -> tr; "en" -> en; else -> ar }
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Header(label("إعداد التنبيهات", "Alarm kurulumu", "Reminder setup"), Icons.Filled.NotificationsActive, ink)
-        Text(label("راجع الإعدادات الأساسية حتى يعمل التنبيه بأفضل شكل. الظهور فوق التطبيقات واستثناء البطارية إعدادان اختياريان حسب رغبتك وهاتفك.", "Alarmların daha güvenilir çalışması için temel ayarları kontrol edin. Üstte gösterim ve pil istisnası isteğe bağlıdır.", "Review the key settings for reliable reminders. Overlay and battery exemption are optional and depend on your device."), color = muted, modifier = Modifier.padding(vertical = 8.dp))
+        Text(label("راجع الحالة وفعّل الأذونات المطلوبة. الظهور فوق التطبيقات واستثناء البطارية اختياريان وقد يختلف أثرهما حسب الجهاز.", "Durumu kontrol edip gerekli izinleri etkinleştirin. Üstte gösterim ve pil istisnası isteğe bağlıdır.", "Review the status and enable required permissions. Overlay and battery exemption are optional and device-dependent."), color = muted, modifier = Modifier.padding(vertical = 8.dp))
+        ScheduleReliabilityCard(lang, surface, ink, muted, refresh)
         PermissionEntry(label("الإشعارات", "Bildirimler", "Notifications"), notificationOk) {
-            val notificationIntent = if (Build.VERSION.SDK_INT >= 26) Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-            else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
-            open(notificationIntent)
+            if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted) notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            else {
+                val notificationIntent = if (Build.VERSION.SDK_INT >= 26) Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
+                open(notificationIntent)
+            }
         }
         PermissionEntry(label("المنبهات الدقيقة", "Kesin alarmlar", "Exact alarms"), exactOk) { if (Build.VERSION.SDK_INT >= 31) open(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))) }
         PermissionEntry(label("واجهة ملء الشاشة على القفل", "Tam ekran alarm", "Full-screen alarm"), fullOk) { if (Build.VERSION.SDK_INT >= 34) open(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}"))) }
@@ -313,28 +319,27 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun ScheduleReliabilityCard(lang: String, surface: Color, ink: Color, muted: Color, openSettings: () -> Unit) {
+@Composable private fun ScheduleReliabilityCard(lang: String, surface: Color, ink: Color, muted: Color, refresh: Int) {
     val context = LocalContext.current
-    val schedule = ScheduleRepository.active(context)
-    val exact = Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms()
-    val notifications = Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
-    val fullScreen = Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
+    val schedule = remember(refresh) { ScheduleRepository.active(context) }
+    val exact = remember(refresh) { Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms() }
+    val notifications = remember(refresh) { Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled() }
+    val fullScreen = remember(refresh) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
     val required = listOfNotNull(
-        if (schedule == null) tr("reliability_no_schedule") else null,
         if (!exact) tr("reliability_exact_missing") else null,
         if (!notifications) tr("reliability_notifications_missing") else null,
         if (!fullScreen) tr("reliability_fullscreen_missing") else null,
     )
-    val next = schedule?.let { AlarmScheduler.nextBase(context, it.id) }
-    val last = AlarmPrefs.sp(context).getLong("last_schedule_success_ms", 0L)
+    val next = remember(refresh, schedule?.id) { schedule?.let { AlarmScheduler.nextBase(context, it.id) } }
+    val last = remember(refresh) { AlarmPrefs.sp(context).getLong("last_schedule_success_ms", 0L) }
     val status = if (required.isEmpty()) tr("reliability_ready") else required.joinToString(" • ")
     val optionalWarnings = buildList {
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(context)) add(when (lang) { "tr" -> "Üstte gösterim kapalı (isteğe bağlı)"; "en" -> "Overlay is off (optional)"; else -> "الظهور فوق التطبيقات غير مفعّل (اختياري)" })
         if (Build.VERSION.SDK_INT >= 23 && !context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)) add(when (lang) { "tr" -> "Pil optimizasyonu hâlâ etkin olabilir"; "en" -> "Battery optimization may restrict delivery"; else -> "قد يقيّد تحسين البطارية وصول التنبيه" })
     }
     Card(Modifier.fillMaxWidth().padding(top = 6.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(14.dp), border = androidx.compose.foundation.BorderStroke(1.dp, if (required.isEmpty()) Teal.copy(alpha = .4f) else MaterialTheme.colorScheme.error.copy(alpha = .45f))) {
-        Column(Modifier.fillMaxWidth().clickable(onClick = openSettings).padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.NotificationsActive, null, tint = if (required.isEmpty()) Teal else MaterialTheme.colorScheme.error); Text(tr("reliability_title"), Modifier.weight(1f).padding(horizontal = 8.dp), color = ink, fontWeight = FontWeight.Bold); Text(tr("manage"), color = Teal, fontSize = 12.sp) }
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.NotificationsActive, null, tint = if (required.isEmpty()) Teal else MaterialTheme.colorScheme.error); Text(tr("reliability_title"), Modifier.weight(1f).padding(horizontal = 8.dp), color = ink, fontWeight = FontWeight.Bold) }
             Text(status, color = if (required.isEmpty()) muted else MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 5.dp))
             optionalWarnings.forEach { Text(it, color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp)) }
             if (next != null) Text("${tr("reliability_next")}: ${next.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US))}", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
@@ -344,14 +349,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun HomeScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, refresh: Int, goNew: () -> Unit, onRefresh: () -> Unit, openSettings: () -> Unit) {
+@Composable private fun HomeScreen(lang: String, surface: Color, ink: Color, muted: Color, bg: Color, refresh: Int, goNew: () -> Unit, onRefresh: () -> Unit) {
     val context = LocalContext.current
     val schedule = ScheduleRepository.active(context)
     val hasSchedule = schedule != null
     var showDelete by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
         Header(tr("home"), Icons.Filled.Home, ink)
-        ScheduleReliabilityCard(lang, surface, ink, muted, openSettings)
         if (!hasSchedule) {
             Card(Modifier.fillMaxWidth().padding(top = 12.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(2.dp)) {
                 Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -683,7 +687,6 @@ private fun methodName(method: String, lang: String): String = when (method) {
     var toneLabel by remember(lang) { mutableStateOf(AlarmPrefs.soundUri(context)?.let { runCatching { RingtoneManager.getRingtone(context, Uri.parse(it))?.getTitle(context) }.getOrNull() } ?: defaultSoundText) }
     fun putBool(key: String, value: Boolean) { AlarmPrefs.sp(context).edit().putBoolean(key, value).apply() }
     fun reschedule() { if (AlarmPrefs.hasSchedule(context)) AlarmScheduler.schedule(context) }
-    fun openSystem(intent: Intent) { panel = ""; runCatching { context.startActivity(intent) } }
     val ringtoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             @Suppress("DEPRECATION") val uri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
@@ -698,16 +701,13 @@ private fun methodName(method: String, lang: String): String = when (method) {
         SettingsOption(surface, ink, muted, Icons.Filled.Language, tr("language"), tr("language_sub"), when (lang) { "tr" -> "Türkçe"; "en" -> "English"; else -> "العربية" }) { panel = "language" }
         SettingsOption(surface, ink, muted, Icons.Filled.Palette, tr("appearance"), tr("appearance_sub"), when (theme) { "dark" -> tr("dark"); "light" -> tr("light"); else -> tr("system") }) { panel = "theme" }
         SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("setup_assistant"), tr("setup_assistant_sub"), tr("manage"), openSetup)
-        SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("setup_assistant"), tr("setup_assistant_sub"), tr("manage"), openSetup)
         SettingsOption(surface, ink, muted, Icons.Filled.NotificationsActive, tr("alarm_options"), tr("alarm_settings_sub"), tr("customized")) { panel = "alarm" }
-        SettingsOption(surface, ink, muted, Icons.Filled.Shield, tr("permissions"), tr("permissions_sub"), tr("manage")) { panel = "permissions" }
         SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("about_app"), tr("about_app_sub"), "v${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}") { panel = "about" }
         SettingsOption(surface, ink, muted, Icons.Filled.Fingerprint, tr("about_developer"), tr("developer_sub"), "") { panel = "developer" }
-        SettingsOption(surface, ink, muted, Icons.Filled.Info, tr("disclaimer"), tr("disclaimer_sub"), "") { panel = "disclaimer" }
     }
     if (panel.isNotEmpty()) androidx.compose.material3.AlertDialog(
         onDismissRequest = { panel = "" },
-        title = { Text(when (panel) { "language" -> tr("choose_language"); "theme" -> tr("appearance"); "alarm" -> tr("alarm_options"); "permissions" -> tr("permissions"); "about" -> tr("about_app"); "developer" -> tr("about_developer"); else -> tr("disclaimer") }, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold) },
+        title = { Text(when (panel) { "language" -> tr("choose_language"); "theme" -> tr("appearance"); "alarm" -> tr("alarm_options"); "about" -> tr("about_app"); else -> tr("about_developer") }, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 540.dp).verticalScroll(rememberScrollState())) {
                 when (panel) {
@@ -740,25 +740,13 @@ private fun methodName(method: String, lang: String): String = when (method) {
                         ToggleRow(surface, ink, Icons.Filled.Alarm, tr("repeat_until_done"), repeatDay) { repeatDay = it; putBool("repeat_on_fingerprint_day", it) }
                         ToggleRow(surface, ink, Icons.Filled.Event, tr("remind_next_day"), remindSecondDay) { remindSecondDay = it; putBool("remind_second_day", it); reschedule() }
                     }
-                    "permissions" -> {
-                        val exactOk = Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms()
-                        val overlayOk = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(context)
-                        val notificationsOk = Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()
-                        val fullScreenOk = Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
-                        val batteryOk = if (Build.VERSION.SDK_INT >= 23) context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) else true
-                        PermissionEntry(tr("exact_alarm"), exactOk) { openSystem(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))) }
-                        PermissionEntry(tr("overlay"), overlayOk) { openSystem(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))) }
-                        PermissionEntry(tr("full_screen_permission"), fullScreenOk) { if (Build.VERSION.SDK_INT >= 34) openSystem(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}"))) }
-                        PermissionEntry(tr("notifications"), notificationsOk) { openSystem(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }
-                        PermissionEntry(tr("battery"), batteryOk) { if (Build.VERSION.SDK_INT >= 23) openSystem(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }
-                        Text(tr("permissions_note"), color = muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
-                    }
                     "about" -> {
                         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Image(painterResource(R.drawable.app_icon_zoomed), contentDescription = tr("about_app"), modifier = Modifier.size(92.dp))
                             Text(tr("app_name"), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
                             Text(tr("app_short_description"), color = muted, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
-            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
+                            Text(tr("disclaimer_body"), color = muted, fontSize = 12.sp, lineHeight = 19.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
+                            Text("${tr("version")}: ${runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "1.3.3"}", color = muted, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
                         }
                     }
                     "developer" -> {
@@ -771,7 +759,7 @@ private fun methodName(method: String, lang: String): String = when (method) {
                         DeveloperLink(surface, ink, R.drawable.ic_brand_telegram, "Telegram", tr("developer_telegram_sub"), "tg://resolve?domain=abw3laa", "https://t.me/abw3laa", "org.telegram.messenger")
                         DeveloperLink(surface, ink, R.drawable.ic_brand_facebook, "Facebook", tr("developer_facebook_sub"), "https://www.facebook.com/share/1EykCQDkjB/")
                     }
-                    else -> Text(tr("disclaimer_body"), color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, lineHeight = 22.sp)
+                    else -> Unit
                 }
             }
         },
