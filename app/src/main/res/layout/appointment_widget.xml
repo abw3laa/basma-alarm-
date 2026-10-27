@@ -34,10 +34,35 @@
         android:id="@+id/widget_next"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:ellipsize="end"
         android:maxLines="2"
         android:paddingTop="4dp"
         android:text="الموعد القادم"
         android:textColor="#FFB7C3CC"
         android:textSize="12sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:orientation="horizontal"
+        android:paddingTop="5dp">
+
+        <TextView
+            android:id="@+id/widget_home"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="4dp"
+            android:text="فتح"
+            android:textColor="#FF86F2E4"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/widget_history"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="4dp"
+            android:text="السجل"
+            android:textColor="#FF86F2E4"
+            android:textSize="11sp" />
+    </LinearLayout>
 </LinearLayout>

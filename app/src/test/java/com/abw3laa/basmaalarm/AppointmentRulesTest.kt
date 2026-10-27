@@ -12,9 +12,9 @@ class AppointmentRulesTest {
     private val start = LocalDate.of(2026, 1, 1)
 
     @Test fun nextDateIsAnActualScheduledCycle() {
-        val next = AppointmentRules.nextOccurrence("s1", "Main", start, 28, 2, emptySet(), LocalDate.of(2026, 3, 1))
+        val next = AppointmentRules.nextOccurrence("s1", "Main", start, 28, 4, emptySet(), LocalDate.of(2026, 3, 1))
         assertEquals(LocalDate.of(2026, 3, 26), next?.baseDate)
-        assertEquals(2, next?.ordinal)
+        assertEquals(4, next?.ordinal)
     }
 
     @Test fun futureAppointmentCannotBeConfirmed() {

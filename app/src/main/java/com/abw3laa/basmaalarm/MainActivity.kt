@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
         val draftId = AlarmPrefs.sp(this).getString("draft_schedule_id", null)
         if (draftId != null) { ScheduleRepository.delete(this, draftId); AlarmPrefs.sp(this).edit().remove("draft_schedule_id").apply() }
         if (AlarmPrefs.hasSchedule(this)) AlarmScheduler.schedule(this)
-        setContent { BasmaApp() }
+        setContent { BasmaApp(intent.getStringExtra("initial_page") ?: "home") }
         checkForUpdate()
     }
 
@@ -210,11 +210,11 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 }
-@Composable private fun BasmaApp() {
+@Composable private fun BasmaApp(initialPage: String = "home") {
     val context = LocalContext.current
     var lang by remember { mutableStateOf(AlarmPrefs.language(context)) }
     var theme by remember { mutableStateOf(AlarmPrefs.theme(context)) }
-    var page by remember { mutableStateOf(if (AlarmPrefs.sp(context).getBoolean("intro_shown", false)) "home" else "welcome") }
+    var page by remember { mutableStateOf(if (AlarmPrefs.sp(context).getBoolean("intro_shown", false)) initialPage else "welcome") }
     var refresh by remember { mutableIntStateOf(0) }
     val dark = when (theme) { "dark" -> true; "light" -> false; else -> androidx.compose.foundation.isSystemInDarkTheme() }
     val bg = if (dark) Color(0xFF111B24) else Canvas
