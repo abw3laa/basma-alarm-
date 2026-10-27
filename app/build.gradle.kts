@@ -11,13 +11,14 @@ android {
         applicationId = "com.abw3laa.basmaalarm"
         minSdk = 23
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.3.3"
+        versionCode = 9
+        versionName = "1.3.5"
     }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "17" }
     val keyPath = System.getenv("ANDROID_KEYSTORE_FILE")
@@ -38,6 +39,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     val composeBom = platform("androidx.compose:compose-bom:2025.01.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
@@ -48,5 +50,6 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

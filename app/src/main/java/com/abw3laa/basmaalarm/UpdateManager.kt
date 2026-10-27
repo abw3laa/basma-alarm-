@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.StatFs
 import android.os.Handler
 import android.os.Looper
 import android.view.ViewGroup
@@ -49,8 +50,8 @@ internal object UpdateManager {
     /** Starts a durable DownloadManager transfer; MediaFire's share page is resolved with WebView first. */
     fun ensureDownloaded(context: Context, info: UpdateInfo, callback: (File?, String) -> Unit) {
         val cached = File(context.cacheDir, "basma-update-${info.versionCode}.apk")
-        if (isValidPackage(context, cached, info)) { callback(cached, "ready"); return }
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (isValidPackage(context, cached, info)) { prefs.edit().remove(retryKey(info)).remove(failureKey(info)).apply(); callback(cached, "ready"); return }
         val savedId = prefs.getLong(downloadIdKey(info), -1L)
         if (savedId > 0) {
             val status = queryStatus(context, savedId)
@@ -59,10 +60,22 @@ internal object UpdateManager {
             }
             if (status == DownloadManager.STATUS_SUCCESSFUL) {
                 val file = materialize(context, savedId, info)
-                if (file != null) { callback(file, "ready"); return }
-                callback(null, "invalid_package"); return
-            } else if (status != -1) prefs.edit().remove(downloadIdKey(info)).apply()
+                if (file != null) { prefs.edit().remove(retryKey(info)).remove(failureKey(info)).apply(); callback(file, "ready"); return }
+                val retries = prefs.getInt(retryKey(info), 0)
+                discardDownload(context, info, savedId)
+                if (retries >= 1) { prefs.edit().putBoolean(failureKey(info), true).apply(); callback(null, "invalid_package"); return }
+                prefs.edit().putInt(retryKey(info), retries + 1).putBoolean(failureKey(info), false).apply()
+            } else if (status != -1) {
+                discardDownload(context, info, savedId)
+                prefs.edit().putBoolean(failureKey(info), true).apply()
+                callback(null, "download_start_failed"); return
+            } else {
+                prefs.edit().remove(downloadIdKey(info)).apply()
+                cleanupArtifacts(context, info)
+            }
         }
+        prefs.edit().putBoolean(failureKey(info), false).apply()
+        if (!hasSpaceForInitialDownload(context)) { prefs.edit().putBoolean(failureKey(info), true).apply(); callback(null, "download_start_failed"); return }
         val direct = directDownloadUrl(info.apkUrl)
         if (direct != null) enqueue(context, info, direct, callback)
         else resolveMediaFireWithWebView(context, info, callback)
@@ -72,9 +85,26 @@ internal object UpdateManager {
     fun downloadedFileIfReady(context: Context, info: UpdateInfo): File? {
         val cached = File(context.cacheDir, "basma-update-${info.versionCode}.apk")
         if (isValidPackage(context, cached, info)) return cached
-        val id = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(downloadIdKey(info), -1L)
-        if (id <= 0 || queryStatus(context, id) != DownloadManager.STATUS_SUCCESSFUL) return null
-        return materialize(context, id, info)
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val id = prefs.getLong(downloadIdKey(info), -1L)
+        if (id <= 0) return null
+        val status = queryStatus(context, id)
+        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+            val file = materialize(context, id, info)
+            if (file != null) { prefs.edit().remove(retryKey(info)).remove(failureKey(info)).apply(); return file }
+            val retries = prefs.getInt(retryKey(info), 0)
+            discardDownload(context, info, id)
+            if (retries < 1) {
+                prefs.edit().putInt(retryKey(info), retries + 1).putBoolean(failureKey(info), false).apply()
+                ensureDownloaded(context, info) { _, _ -> }
+            } else prefs.edit().putBoolean(failureKey(info), true).apply()
+            return null
+        }
+        if (status != DownloadManager.STATUS_PENDING && status != DownloadManager.STATUS_RUNNING && status != DownloadManager.STATUS_PAUSED) {
+            discardDownload(context, info, id)
+            prefs.edit().putBoolean(failureKey(info), true).apply()
+        }
+        return null
     }
 
     private fun resolveMediaFireWithWebView(context: Context, info: UpdateInfo, callback: (File?, String) -> Unit) {
@@ -92,7 +122,10 @@ internal object UpdateManager {
             web = null
         }
         fun finish(file: File?, state: String) {
-            if (completed.compareAndSet(false, true)) { cleanup(); callback(file, state) }
+            if (completed.compareAndSet(false, true)) {
+                if (file == null && state != "downloading") context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(failureKey(info), true).apply()
+                cleanup(); callback(file, state)
+            }
         }
         fun capture(candidate: String): Boolean {
             val normalized = candidate.replace("\\u0026", "&").replace("\\/", "/").replace("&amp;", "&")
@@ -160,10 +193,14 @@ internal object UpdateManager {
             val manager = context.getSystemService(DownloadManager::class.java)
             val cookies = android.webkit.CookieManager.getInstance().getCookie(info.apkUrl)
             if (!cookies.isNullOrBlank()) request.addRequestHeader("Cookie", cookies)
+            if (!hasSpaceForInitialDownload(context)) throw IllegalStateException("Insufficient storage for update download")
             val id = manager.enqueue(request)
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putLong(downloadIdKey(info), id).apply()
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putLong(downloadIdKey(info), id).putBoolean(failureKey(info), false).apply()
             callback(null, "downloading")
-        }.onFailure { callback(null, "download_start_failed") }
+        }.onFailure {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(failureKey(info), true).apply()
+            callback(null, "download_start_failed")
+        }
     }
 
     private fun queryStatus(context: Context, id: Long): Int {
@@ -171,16 +208,22 @@ internal object UpdateManager {
         return runCatching { manager.query(DownloadManager.Query().setFilterById(id)).use { cursor -> if (!cursor.moveToFirst()) -1 else cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) } }.getOrDefault(-1)
     }
 
-    private fun materialize(context: Context, id: Long, info: UpdateInfo): File? = runCatching {
-        val manager = context.getSystemService(DownloadManager::class.java)
+    private fun materialize(context: Context, id: Long, info: UpdateInfo): File? {
         val out = File(context.cacheDir, "basma-update-${info.versionCode}.apk")
         val tmp = File(context.cacheDir, "basma-update-${info.versionCode}.part")
-        manager.openDownloadedFile(id).use { descriptor -> FileInputStream(descriptor.fileDescriptor).use { input -> FileOutputStream(tmp).use { output -> input.copyTo(output) } } }
-        if (!isValidPackage(context, tmp, info)) throw IllegalStateException("APK package/signature validation failed")
-        if (out.exists()) out.delete()
-        if (!tmp.renameTo(out)) tmp.copyTo(out, overwrite = true)
-        out
-    }.getOrNull()
+        return runCatching {
+            val manager = context.getSystemService(DownloadManager::class.java)
+            manager.openDownloadedFile(id).use { descriptor ->
+                val expectedBytes = descriptor.statSize.coerceAtLeast(0L)
+                if (expectedBytes > 0 && availableBytes(context.cacheDir) < expectedBytes * 2L + MIN_FREE_BYTES) throw IllegalStateException("Insufficient cache storage")
+                FileInputStream(descriptor.fileDescriptor).use { input -> FileOutputStream(tmp).use { output -> input.copyTo(output) } }
+            }
+            if (!isValidPackage(context, tmp, info)) throw IllegalStateException("APK package/signature validation failed")
+            if (out.exists()) out.delete()
+            if (!tmp.renameTo(out)) { tmp.copyTo(out, overwrite = true); tmp.delete() }
+            out
+        }.getOrElse { tmp.delete(); null }
+    }
 
     private fun isValidPackage(context: Context, file: File, info: UpdateInfo): Boolean {
         if (!file.exists() || file.length() < 100_000) return false
@@ -212,5 +255,33 @@ internal object UpdateManager {
         return context.packageManager.getPackageInfo(context.packageName, flags)
     }
 
+    private const val MIN_FREE_BYTES = 32L * 1024L * 1024L
+
+    private fun availableBytes(directory: File): Long = runCatching { StatFs(directory.absolutePath).availableBytes }.getOrDefault(0L)
+
+    private fun hasSpaceForInitialDownload(context: Context): Boolean {
+        val destination = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+        destination.mkdirs()
+        return availableBytes(destination) >= MIN_FREE_BYTES && availableBytes(context.cacheDir) >= MIN_FREE_BYTES
+    }
+
+    private fun discardDownload(context: Context, info: UpdateInfo, id: Long) {
+        runCatching { context.getSystemService(DownloadManager::class.java).remove(id) }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(downloadIdKey(info)).apply()
+        File(context.cacheDir, "basma-update-${info.versionCode}.part").delete()
+        File(context.cacheDir, "basma-update-${info.versionCode}.apk").delete()
+        context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?.let { File(it, "basma-update-${info.versionCode}.apk").delete() }
+    }
+
+    private fun cleanupArtifacts(context: Context, info: UpdateInfo) {
+        File(context.cacheDir, "basma-update-${info.versionCode}.part").delete()
+        context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?.let { File(it, "basma-update-${info.versionCode}.apk").delete() }
+    }
+
+    fun hasTerminalFailure(context: Context, info: UpdateInfo): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(failureKey(info), false)
+
+    private fun retryKey(info: UpdateInfo) = "update_retry_${info.versionCode}"
+    private fun failureKey(info: UpdateInfo) = "update_failed_${info.versionCode}"
     private fun downloadIdKey(info: UpdateInfo) = "update_download_id_${info.versionCode}"
 }
