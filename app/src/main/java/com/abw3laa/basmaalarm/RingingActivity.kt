@@ -41,11 +41,13 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 class RingingActivity : ComponentActivity() {
+    private var scheduleId: String = "legacy"
     private var baseDay: Long = LocalDate.now().toEpochDay()
     private var windowDay: Int = 1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        scheduleId = intent.getStringExtra(EXTRA_SCHEDULE_ID) ?: AlarmPrefs.schedule(this)?.id ?: "legacy"
         baseDay = intent.getLongExtra(EXTRA_BASE_DAY, baseDay)
         windowDay = intent.getIntExtra(EXTRA_WINDOW, 1).coerceIn(1, 3)
         if (Build.VERSION.SDK_INT >= 27) {
@@ -67,13 +69,13 @@ class RingingActivity : ComponentActivity() {
                 android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
                 android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
         }
-        setContent { RingingContent(baseDay, windowDay, ::handle) }
+        setContent { RingingContent(scheduleId, baseDay, windowDay, ::handle) }
     }
 
     override fun onResume() {
         super.onResume()
         AlarmPrefs.sp(this).edit().putBoolean("ring_activity_visible", true).apply()
-        runCatching { startService(Intent(this, AlarmPlaybackService::class.java).setAction(AlarmPlaybackService.ACTION_SCREEN_VISIBLE)) }
+        runCatching { startService(Intent(this, AlarmPlaybackService::class.java).setAction(AlarmPlaybackService.ACTION_SCREEN_VISIBLE).putExtra(EXTRA_SCHEDULE_ID, scheduleId).putExtra(EXTRA_BASE_DAY, baseDay).putExtra(EXTRA_WINDOW, windowDay)) }
     }
 
     override fun onPause() {
@@ -81,6 +83,7 @@ class RingingActivity : ComponentActivity() {
         if (!isFinishing) runCatching {
             startService(Intent(this, AlarmPlaybackService::class.java)
                 .setAction(AlarmPlaybackService.ACTION_ACTIVITY_HIDDEN)
+                .putExtra(EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(EXTRA_BASE_DAY, baseDay)
                 .putExtra(EXTRA_WINDOW, windowDay))
         }
@@ -91,22 +94,23 @@ class RingingActivity : ComponentActivity() {
         if (action == ACTION_STOP) {
             startService(Intent(this, AlarmPlaybackService::class.java)
                 .setAction(ACTION_MUTE)
+                .putExtra(EXTRA_SCHEDULE_ID, scheduleId)
                 .putExtra(EXTRA_BASE_DAY, baseDay)
                 .putExtra(EXTRA_WINDOW, windowDay))
             return
         }
         when (action) {
-            ACTION_DONE -> { AlarmPrefs.markDone(this, baseDay); AlarmScheduler.schedule(this) }
-            ACTION_SNOOZE -> AlarmScheduler.snooze(this, baseDay, windowDay)
+            ACTION_DONE -> { AlarmPrefs.markDone(this, baseDay, "ringing_screen", scheduleId); AlarmScheduler.schedule(this) }
+            ACTION_SNOOZE -> AlarmScheduler.snooze(this, baseDay, windowDay, scheduleId)
         }
         stopService(Intent(this, AlarmPlaybackService::class.java))
-        getSystemService(android.app.NotificationManager::class.java).cancel(NOTIFICATION_ID)
+        getSystemService(android.app.NotificationManager::class.java).cancel((AlarmPrefs.schedule(this, scheduleId)?.notificationId ?: 1) + NOTIFICATION_ID_BASE)
         finish()
     }
 }
 
 @Composable
-private fun RingingContent(baseDay: Long, windowDay: Int, action: (String) -> Unit) {
+private fun RingingContent(scheduleId: String, baseDay: Long, windowDay: Int, action: (String) -> Unit) {
     val context = LocalContext.current
     val language = currentLanguage()
     val isArabic = language == "ar"
@@ -126,7 +130,7 @@ private fun RingingContent(baseDay: Long, windowDay: Int, action: (String) -> Un
     val redSurface = if (dark) Color(0xFF49252A) else Color(0xFFFFE8E7)
     val baseDate = LocalDate.ofEpochDay(baseDay)
     val activeDate = baseDate.plusDays((windowDay - 1).toLong())
-    val alarmTime = LocalTime.of(AlarmPrefs.hour(context), AlarmPrefs.minute(context))
+    val alarmTime = LocalTime.of(AlarmPrefs.hour(context, scheduleId), AlarmPrefs.minute(context, scheduleId))
     val timeText = alarmTime.format(DateTimeFormatter.ofPattern("h:mm", Locale.US))
     val period = when (language) {
         "ar" -> if (alarmTime.hour < 12) "صباحًا" else "مساءً"
