@@ -87,7 +87,7 @@ jobs:
             printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/basma-release.jks"
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Release APK was not built: configure all four secrets in the protected release environment." >&2
+            echo "Release APK was not built: configure all four GitHub Actions secrets at repository scope or in the release environment." >&2
             exit 1
           fi
       - name: Build signed release APK

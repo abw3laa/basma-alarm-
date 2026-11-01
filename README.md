@@ -27,7 +27,7 @@
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
-أضف الأسرار الأربعة إلى **Environment secrets** في `Settings → Environments → release`، واقصر النشر في إعداد البيئة على `main`. انقل القيم الموجودة في Repository Actions secrets إلى البيئة ثم احذف النسخ القديمة من نطاق المستودع؛ لا تضع ملف keystore أو كلمات المرور في Git. يجب استخدام **ملف التوقيع نفسه** لكل إصدار لاحق، وإلا سيرفض Android التثبيت فوق النسخة السابقة. ينتج تشغيل Actions ملف Release ضمن artifact باسم `basma-release-signed`. إذا لم تُنقل الأسرار، ينجح فحص PR لكن Release لا ينتج APK موقعاً.
+يستخدم workflow الأسماء أعلاه من سياق `secrets` داخل وظيفة Release. يمكنك إبقاء القيم الحالية كـ **Repository Actions secrets**؛ لا حاجة لنقلها أو تغييرها، وتستطيع GitHub أيضاً إتاحة أسرار بيئة `release` للوظيفة إذا استُخدمت. وظيفة Release مرتبطة ببيئة `release` المقيّدة إلى `main` فقط. لا تضع ملف keystore أو كلمات المرور في Git. يجب استخدام **ملف التوقيع نفسه** لكل إصدار لاحق، وإلا سيرفض Android التثبيت فوق النسخة السابقة. ينتج تشغيل Actions ملف Release ضمن artifact باسم `basma-release-signed`، ويفشل بوضوح إذا غاب أي سر مطلوب.
 
 آخر إصدار عام هو `versionName=1.3.3` و`versionCode=7`. أُعدّ سابقاً مرشحا 1.3.4/8 و1.3.5/9 للاختبار، لكن الإصلاحات الجديدة لم تُنشر بعد. الفرع الحالي يجهّز مرشح `versionName=1.3.6` و`versionCode=10` متضمناً إصلاحات التدقيق. بيان `abw3laa/basma-alarm-updates` يبقى على الإصدار العام 1.3.3 إلى أن يُختبر المرشح ويُعتمد ويُرفع APK النهائي على MediaFire.
 
