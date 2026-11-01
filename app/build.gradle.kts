@@ -11,8 +11,8 @@ android {
         applicationId = "com.abw3laa.basmaalarm"
         minSdk = 23
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.3.5"
+        versionCode = 10
+        versionName = "1.3.6"
     }
     buildFeatures { compose = true }
     compileOptions {
@@ -51,5 +51,6 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -11,37 +11,68 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  verify:
+    name: Tests, lint, and debug build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
+      # actions/checkout v4.2.2
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-java v4.7.1
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
         with:
           distribution: temurin
           java-version: '17'
+      # android-actions/setup-android v3.2.2
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
         with:
           cmdline-tools-version: '12.0'
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-      - name: Run unit tests
-        run: gradle --no-daemon testDebugUnitTest
-      - name: Run Android Lint
-        run: gradle --no-daemon lintDebug
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+      # gradle/actions/setup-gradle v4.4.2
+      - name: Set up Gradle and validate wrapper
+        uses: gradle/actions/setup-gradle@017a9effdb900e5b5b2fddfb590a105619dca3c3
+      - name: Run tests, lint, and debug build
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
+      # actions/upload-artifact v4.6.2
       - name: Upload debug APK (CI verification only)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: basma-debug-ci
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
+
+  release:
+    name: Signed release build
+    needs: verify
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: release
+    permissions:
+      contents: read
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # actions/setup-java v4.7.1
+      - name: Set up JDK 17
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+        with:
+          distribution: temurin
+          java-version: '17'
+      # android-actions/setup-android v3.2.2
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        with:
+          cmdline-tools-version: '12.0'
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      # gradle/actions/setup-gradle v4.4.2
+      - name: Set up Gradle and validate wrapper
+        uses: gradle/actions/setup-gradle@017a9effdb900e5b5b2fddfb590a105619dca3c3
       - name: Check release signing secrets
         id: signing
         shell: bash
@@ -51,12 +82,13 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          umask 077
           if [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/basma-release.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/basma-release.jks"
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Release APK was not built: configure all four signing secrets to enable stable signed updates."
+            echo "Release APK was not built: configure all four secrets in the protected release environment." >&2
+            exit 1
           fi
       - name: Build signed release APK
         if: steps.signing.outputs.ready == 'true'
@@ -65,13 +97,17 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle --no-daemon assembleRelease
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Remove temporary keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/basma-release.jks"
       - name: Verify release signature
         if: steps.signing.outputs.ready == 'true'
         run: $ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | sort -V | tail -1)/apksigner verify --verbose app/build/outputs/apk/release/app-release.apk
+      # actions/upload-artifact v4.6.2
       - name: Upload signed release APK
         if: steps.signing.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: basma-release-signed
           path: app/build/outputs/apk/release/app-release.apk

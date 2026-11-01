@@ -92,6 +92,13 @@ class MainActivity : ComponentActivity() {
     private var installAfterDownload = false
     private val updateHandler = Handler(Looper.getMainLooper())
     private var updatePollAttempts = 0
+    private var scheduledUpdateRetryVersion: Long? = null
+    private val permissionRefresh = mutableIntStateOf(0)
+
+    override fun onResume() {
+        super.onResume()
+        permissionRefresh.intValue++
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,7 +115,7 @@ class MainActivity : ComponentActivity() {
         val draftId = AlarmPrefs.sp(this).getString("draft_schedule_id", null)
         if (draftId != null) { ScheduleRepository.delete(this, draftId); AlarmPrefs.sp(this).edit().remove("draft_schedule_id").apply() }
         if (AlarmPrefs.hasSchedule(this)) AlarmScheduler.schedule(this)
-        setContent { BasmaApp(intent.getStringExtra("initial_page") ?: "home") }
+        setContent { BasmaApp(intent.getStringExtra("initial_page") ?: "home", permissionRefresh.intValue) }
         checkForUpdate()
     }
 
@@ -118,10 +125,12 @@ class MainActivity : ComponentActivity() {
             pendingUpdate = info
             UpdateManager.ensureDownloaded(this, info) { file, state ->
                 if (file != null) pendingApk = file
-                if (state == "download_start_failed" || state == "mediafire_link_not_found" || state == "mediafire_timeout" || state == "invalid_package") {
-                    if (state == "invalid_package") { installAfterDownload = false; updateHandler.removeCallbacksAndMessages(null) }
+                if (state == "retry_scheduled") scheduleUpdateRetry(info)
+                if (state == "download_start_failed" || state == "mediafire_link_not_found" || state == "mediafire_timeout" || state == "invalid_package" || state == "invalid_manifest") {
+                    if (state == "invalid_package" || state == "invalid_manifest") { installAfterDownload = false; updateHandler.removeCallbacksAndMessages(null) }
                     val text = when (state) {
                         "invalid_package" -> updateText("ملف التحديث لا يطابق التطبيق أو مفتاح توقيعه.", "Güncelleme dosyasının uygulama veya imza anahtarı eşleşmiyor.", "The update package or signing key does not match this app.")
+                        "invalid_manifest" -> updateText("رابط أو بيان التحديث غير صالح.", "Güncelleme bağlantısı veya manifesti geçersiz.", "The update link or manifest is invalid.")
                         else -> updateText("تعذر بدء تنزيل التحديث. تحقق من رابط MediaFire واتصل بالإنترنت.", "Güncelleme indirilemedi. MediaFire bağlantısını ve interneti kontrol edin.", "The update could not be downloaded. Check the MediaFire link and your connection.")
                     }
                     Toast.makeText(this, text, Toast.LENGTH_LONG).show()
@@ -158,11 +167,37 @@ class MainActivity : ComponentActivity() {
                 pendingApk = file
                 installOrRequestPermission(file)
             } else if (state == "downloading") pollUpdate(info)
+            else if (state == "retry_scheduled") scheduleUpdateRetry(info)
             else {
                 installAfterDownload = false
                 Toast.makeText(this, updateText("تعذر بدء تنزيل التحديث. تحقق من رابط MediaFire واتصل بالإنترنت.", "Güncelleme indirilemedi. MediaFire bağlantısını ve interneti kontrol edin.", "The update could not be downloaded. Check the MediaFire link and your connection."), Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun scheduleUpdateRetry(info: UpdateInfo) {
+        if (scheduledUpdateRetryVersion == info.versionCode) return
+        scheduledUpdateRetryVersion = info.versionCode
+        val delay = UpdateManager.retryDelayRemaining(this, info).coerceAtLeast(1_000L)
+        Toast.makeText(this, updateText("تعذر التنزيل مؤقتاً؛ ستتم إعادة المحاولة مرة واحدة بعد قليل.", "İndirme geçici olarak başarısız oldu; kısa süre sonra bir kez daha denenecek.", "The download failed temporarily; one retry will run shortly."), Toast.LENGTH_LONG).show()
+        updateHandler.postDelayed({
+            if (scheduledUpdateRetryVersion == info.versionCode) scheduledUpdateRetryVersion = null
+            if (isFinishing) return@postDelayed
+            UpdateManager.ensureDownloaded(this, info) { file, state ->
+                when {
+                    file != null -> {
+                        pendingApk = file
+                        if (installAfterDownload) { installAfterDownload = false; installOrRequestPermission(file) }
+                    }
+                    state == "retry_scheduled" -> scheduleUpdateRetry(info)
+                    state == "downloading" && installAfterDownload -> pollUpdate(info)
+                    state == "download_start_failed" || state == "invalid_package" -> {
+                        installAfterDownload = false
+                        Toast.makeText(this, updateText("فشل تنزيل التحديث بعد إعادة المحاولة.", "Yeniden denemeden sonra güncelleme indirilemedi.", "The update download failed after its retry."), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }, delay)
     }
 
     private fun pollUpdate(info: UpdateInfo) {
@@ -210,7 +245,7 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 }
-@Composable private fun BasmaApp(initialPage: String = "home") {
+@Composable private fun BasmaApp(initialPage: String = "home", permissionRefresh: Int = 0) {
     val context = LocalContext.current
     var lang by remember { mutableStateOf(AlarmPrefs.language(context)) }
     var theme by remember { mutableStateOf(AlarmPrefs.theme(context)) }
@@ -241,7 +276,7 @@ class MainActivity : ComponentActivity() {
                 Box(Modifier.fillMaxSize().padding(pad)) {
                     when (page) {
                         "welcome" -> WelcomeScreen(lang, surface, ink, muted, bg, beginSetup = { page = "setup" }, skip = { AlarmPrefs.sp(context).edit().putBoolean("intro_shown", true).apply(); page = "home" })
-                        "setup" -> SetupAssistantScreen(lang, surface, ink, muted, done = { AlarmPrefs.sp(context).edit().putBoolean("intro_shown", true).apply(); page = "home" })
+                        "setup" -> SetupAssistantScreen(lang, surface, ink, muted, permissionRefresh = permissionRefresh, done = { AlarmPrefs.sp(context).edit().putBoolean("intro_shown", true).apply(); page = "home" })
                         "new" -> NewAppointment(lang, surface, ink, muted, bg, onCancel = {
                             val draft = AlarmPrefs.sp(context).getString("draft_schedule_id", null)
                             if (draft != null) { ScheduleRepository.delete(context, draft); AlarmPrefs.sp(context).edit().remove("draft_schedule_id").apply(); AlarmScheduler.schedule(context) }
@@ -253,7 +288,7 @@ class MainActivity : ComponentActivity() {
                             setLang = { lang = it; AlarmPrefs.sp(context).edit().putString("language", it).apply() },
                             setTheme = { theme = it; AlarmPrefs.sp(context).edit().putString("theme", it).apply() },
                             openSetup = { page = "setup" })
-                        else -> HomeScreen(lang, surface, ink, muted, bg, refresh, goNew = { page = "new" }, onRefresh = { refresh++ })
+                        else -> HomeScreen(lang, surface, ink, muted, bg, refresh + permissionRefresh, goNew = { page = "new" }, onRefresh = { refresh++ })
                     }
                 }
             }
@@ -285,22 +320,23 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun SetupAssistantScreen(lang: String, surface: Color, ink: Color, muted: Color, done: () -> Unit) {
+@Composable private fun SetupAssistantScreen(lang: String, surface: Color, ink: Color, muted: Color, permissionRefresh: Int = 0, done: () -> Unit) {
     val context = LocalContext.current
     var refresh by remember { mutableIntStateOf(0) }
-    val exactOk = remember(refresh) { Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms() }
-    val notificationOk = remember(refresh) { Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled() }
-    val notificationPermissionGranted = remember(refresh) { Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    val refreshKey = refresh + permissionRefresh
+    val exactOk = remember(refreshKey) { Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms() }
+    val notificationPermissionGranted = remember(refreshKey) { Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED }
+    val notificationOk = remember(refreshKey) { (Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()) && notificationPermissionGranted }
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
-    val overlayOk = remember(refresh) { Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(context) }
-    val fullOk = remember(refresh) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
-    val batteryOk = remember(refresh) { Build.VERSION.SDK_INT < 23 || context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
+    val overlayOk = remember(refreshKey) { Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(context) }
+    val fullOk = remember(refreshKey) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
+    val batteryOk = remember(refreshKey) { Build.VERSION.SDK_INT < 23 || context.getSystemService(android.os.PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
     fun open(intent: Intent) { runCatching { context.startActivity(intent) } }
     fun label(ar: String, tr: String, en: String) = when (lang) { "tr" -> tr; "en" -> en; else -> ar }
     Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
         Header(label("إعداد التنبيهات", "Alarm kurulumu", "Reminder setup"), Icons.Filled.NotificationsActive, ink)
         Text(label("راجع الحالة وفعّل الأذونات المطلوبة. الظهور فوق التطبيقات واستثناء البطارية اختياريان وقد يختلف أثرهما حسب الجهاز.", "Durumu kontrol edip gerekli izinleri etkinleştirin. Üstte gösterim ve pil istisnası isteğe bağlıdır.", "Review the status and enable required permissions. Overlay and battery exemption are optional and device-dependent."), color = muted, modifier = Modifier.padding(vertical = 8.dp))
-        ScheduleReliabilityCard(lang, surface, ink, muted, refresh)
+        ScheduleReliabilityCard(lang, surface, ink, muted, refreshKey)
         PermissionEntry(label("الإشعارات", "Bildirimler", "Notifications"), notificationOk) {
             if (Build.VERSION.SDK_INT >= 33 && !notificationPermissionGranted) notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
             else {
@@ -323,11 +359,21 @@ class MainActivity : ComponentActivity() {
     val context = LocalContext.current
     val schedule = remember(refresh) { ScheduleRepository.active(context) }
     val exact = remember(refresh) { Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms() }
-    val notifications = remember(refresh) { Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled() }
+    val notifications = remember(refresh) {
+        (Build.VERSION.SDK_INT < 24 || context.getSystemService(android.app.NotificationManager::class.java).areNotificationsEnabled()) &&
+            (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+    }
+    val channelOk = remember(refresh) {
+        if (Build.VERSION.SDK_INT < 26) true else {
+            val channel = context.getSystemService(android.app.NotificationManager::class.java).getNotificationChannel(alarmChannelId(context))
+            channel != null && channel.importance > android.app.NotificationManager.IMPORTANCE_NONE
+        }
+    }
     val fullScreen = remember(refresh) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
     val required = listOfNotNull(
         if (!exact) tr("reliability_exact_missing") else null,
         if (!notifications) tr("reliability_notifications_missing") else null,
+        if (!channelOk) tr("reliability_channel_missing") else null,
         if (!fullScreen) tr("reliability_fullscreen_missing") else null,
     )
     val next = remember(refresh, schedule?.id) { schedule?.let { AlarmScheduler.nextBase(context, it.id) } }
@@ -346,6 +392,24 @@ class MainActivity : ComponentActivity() {
             if (last > 0L) Text("${tr("reliability_last_schedule")}: ${java.time.Instant.ofEpochMilli(last).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd/MM HH:mm", Locale.forLanguageTag(lang)))}", color = muted, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
             Text(tr("reliability_caveat"), color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
         }
+    }
+}
+
+private fun homeAlarmStatus(context: Context, refresh: Int): String {
+    val exactOk = Build.VERSION.SDK_INT < 31 || context.getSystemService(android.app.AlarmManager::class.java).canScheduleExactAlarms()
+    val notifications = context.getSystemService(android.app.NotificationManager::class.java)
+    val notificationsOk = (Build.VERSION.SDK_INT < 24 || notifications.areNotificationsEnabled()) &&
+        (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+    val channelOk = Build.VERSION.SDK_INT < 26 || run {
+        val channel = notifications.getNotificationChannel(if (AlarmPrefs.highPriority(context)) CHANNEL_ALARM_HIGH else CHANNEL_ALARM_NORMAL)
+        channel != null && channel.importance > android.app.NotificationManager.IMPORTANCE_NONE
+    }
+    val fullScreenOk = Build.VERSION.SDK_INT < 34 || notifications.canUseFullScreenIntent()
+    val ok = exactOk && notificationsOk && channelOk && fullScreenOk
+    return when (AlarmPrefs.language(context)) {
+        "tr" -> if (ok) "İzinler ve bildirim kanalı kullanılabilir" else "Alarm izinlerini veya bildirim kanalını kontrol edin"
+        "en" -> if (ok) "Permissions and notification channel are available" else "Check alarm permissions or notification channel"
+        else -> if (ok) "الأذونات وقناة الإشعارات متاحة" else "تحقق من أذونات التنبيه أو قناة الإشعارات"
     }
 }
 
@@ -386,9 +450,10 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Filled.Shield, null, tint = if (MaterialTheme.colorScheme.background.luminance() < .45f) Color(0xFF86F2E4) else Teal, modifier = Modifier.size(34.dp))
-                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(active.name, color = ink, fontWeight = FontWeight.Bold); Text(tr("secure_sub"), color = muted, fontSize = 12.sp) }
-                            Icon(Icons.Filled.Check, null, tint = Teal, modifier = Modifier.size(25.dp))
+                            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) { Text(active.name, color = ink, fontWeight = FontWeight.Bold); Text(homeAlarmStatus(context, refresh), color = muted, fontSize = 12.sp) }
+                            Icon(Icons.Filled.NotificationsActive, null, tint = Teal, modifier = Modifier.size(25.dp))
                         }
+                        Text(tr("home_alarm_caveat"), color = muted, fontSize = 10.sp, modifier = Modifier.padding(top = 4.dp))
                         Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.End) {
                             TextButton(onClick = goNew) { Icon(Icons.Filled.Edit, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("edit_schedule")) }
                             TextButton(onClick = { showDelete = true }) { Icon(Icons.Filled.Delete, null, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(4.dp)); Text(tr("delete_schedule"), color = MaterialTheme.colorScheme.error) }
@@ -572,7 +637,7 @@ class MainActivity : ComponentActivity() {
             } else if (upcoming.isEmpty()) Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
                 Column(Modifier.fillMaxWidth().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(tr("schedule_ended"), color = ink, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center); Text(tr("schedule_ended_sub"), color = muted, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp)); Button(onClick = { navigate("new") }, Modifier.padding(top = 14.dp)) { Icon(Icons.Filled.Edit, null); Spacer(Modifier.width(6.dp)); Text(tr("extend_schedule")) } }
             }
-            upcoming.forEachIndexed { index, occurrence ->
+            upcoming.forEach { occurrence ->
                 val date = occurrence.baseDate
                 val state = AppointmentRules.state(occurrence, today, false)
                 val isAvailable = state == AppointmentState.AVAILABLE
@@ -580,7 +645,7 @@ class MainActivity : ComponentActivity() {
                     Column(Modifier.padding(14.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                BadgeText("${index + 1}", if (index == 0) Mint else bg, if (index == 0) Teal else muted)
+                                BadgeText("${occurrence.ordinal}", if (occurrence.ordinal == 1) Mint else bg, if (occurrence.ordinal == 1) Teal else muted)
                                 Column(Modifier.padding(start = 10.dp)) { Text(tr("schedule_name"), color = muted, fontSize = 12.sp); Text(date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)), color = ink, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
                             }
                             BadgeText(tr(if (isAvailable) "available_now" else "scheduled"), if (isAvailable) Mint else bg, if (isAvailable) Teal else muted)
@@ -600,6 +665,12 @@ class MainActivity : ComponentActivity() {
     var redraw by remember { mutableIntStateOf(0) }
     var selectedEvent by remember { mutableStateOf<AppointmentEvent?>(null) }
     var noteText by remember { mutableStateOf("") }
+    val exportTitle = tr("history_title")
+    val notConfirmedLabel = tr("not_confirmed_short")
+    val exportButtonLabel = tr("export_history")
+    val exportFailureText = tr("export_failed")
+    val saveNoteFailureText = tr("note_save_failed")
+    val historyRetentionNotice = tr("history_retention_notice")
     val schedules = ScheduleRepository.all(context)
     val today = LocalDate.now()
     val events = remember(refresh, redraw) {
@@ -616,8 +687,23 @@ class MainActivity : ComponentActivity() {
     }.sortedByDescending { it.baseDate }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Header(tr("history"), Icons.Filled.History, ink)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = {
+                val shareText = buildString {
+                    appendLine(exportTitle)
+                    events.forEach { event ->
+                        val dateText = runCatching { LocalDate.ofEpochDay(event.appointmentEpochDay).format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US)) }.getOrDefault(event.appointmentEpochDay.toString())
+                        appendLine("• ${event.scheduleName} — $dateText${if (event.note.isNotBlank()) " — ${event.note}" else ""}")
+                    }
+                    missed.forEach { appendLine("• ${it.scheduleName} — ${it.baseDate.format(DateTimeFormatter.ofPattern("dd/MM/yyyy", Locale.US))} — ${notConfirmedLabel}") }
+                }
+                runCatching { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, shareText), exportButtonLabel)) }
+                    .onFailure { Toast.makeText(context, exportFailureText, Toast.LENGTH_LONG).show() }
+            }) { Icon(Icons.Filled.Send, null); Spacer(Modifier.width(4.dp)); Text(tr("export_history")) }
+        }
         Text(tr("history_title"), color = ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
-        Text(tr("history_sub"), color = muted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 12.dp))
+        Text(tr("history_sub"), color = muted, fontSize = 13.sp)
+        Text(historyRetentionNotice, color = muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 12.dp, top = 2.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             if (events.isEmpty() && missed.isEmpty()) Card(Modifier.fillMaxWidth().padding(top = 6.dp), colors = CardDefaults.cardColors(containerColor = surface), shape = RoundedCornerShape(18.dp)) {
                 Text(tr("no_previous"), Modifier.fillMaxWidth().padding(24.dp), color = muted, textAlign = TextAlign.Center)
@@ -638,7 +724,7 @@ class MainActivity : ComponentActivity() {
                         } else Text(tr("legacy_history_note"), color = muted, fontSize = 12.sp)
 
                         if (event.note.isNotBlank()) Text("${tr("note")}: ${event.note}", color = ink, fontSize = 13.sp, modifier = Modifier.padding(top = 5.dp))
-                        TextButton(onClick = { selectedEvent = event; noteText = event.note }) { Text(tr(if (event.note.isBlank()) "add_note" else "edit_note")) }
+                        if (event.confirmedAtEpochMillis > 0L) TextButton(onClick = { selectedEvent = event; noteText = event.note }) { Text(tr(if (event.note.isBlank()) "add_note" else "edit_note")) }
                     }
                 }
             }
@@ -656,7 +742,10 @@ class MainActivity : ComponentActivity() {
     selectedEvent?.let { event ->
         androidx.compose.material3.AlertDialog(onDismissRequest = { selectedEvent = null }, title = { Text(tr("note")) }, text = {
             OutlinedTextField(value = noteText, onValueChange = { noteText = it.take(280) }, label = { Text(tr("note_optional")) }, minLines = 2, maxLines = 4)
-        }, confirmButton = { TextButton(onClick = { ScheduleRepository.updateEventNote(context, event.confirmedAtEpochMillis, noteText); selectedEvent = null; redraw++ }) { Text(tr("save")) } }, dismissButton = { TextButton(onClick = { selectedEvent = null }) { Text(tr("cancel")) } })
+        }, confirmButton = { TextButton(onClick = {
+            val saved = runCatching { ScheduleRepository.updateEventNote(context, event.scheduleId, event.appointmentEpochDay, noteText) }.getOrDefault(false)
+            if (saved) { selectedEvent = null; redraw++ } else Toast.makeText(context, saveNoteFailureText, Toast.LENGTH_LONG).show()
+        }) { Text(tr("save_note")) } }, dismissButton = { TextButton(onClick = { selectedEvent = null }) { Text(tr("cancel")) } })
     }
 }
 
@@ -735,7 +824,10 @@ private fun methodName(method: String, lang: String): String = when (method) {
                         ChoiceChips(listOf(0, 5, 10, 15, 30, 60), autoStop, { if (it == 0) tr("off") else "$it ${tr("minutes_short")}" }) { autoStop = it; AlarmPrefs.sp(context).edit().putInt("auto_stop_minutes", it).apply() }
                         Text(tr("snooze_duration"), color = ink, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 9.dp, bottom = 4.dp))
                         ChoiceChips(listOf(5, 10, 15, 30, 60), snooze, { "$it ${tr("minutes_short")}" }) { snooze = it; AlarmPrefs.sp(context).edit().putInt("snooze_minutes", it).apply(); reschedule() }
-                        ToggleRow(surface, ink, Icons.Filled.NotificationsActive, tr("high_priority"), highPriority) { highPriority = it; putBool("high_priority", it); ensureAlarmChannel(context) }
+                        Column {
+                            ToggleRow(surface, ink, Icons.Filled.NotificationsActive, tr("high_priority"), highPriority) { highPriority = it; putBool("high_priority", it); ensureAlarmChannel(context) }
+                            Text(tr("high_priority_sub"), color = muted, fontSize = 11.sp, modifier = Modifier.padding(start = 12.dp, bottom = 8.dp))
+                        }
                         ToggleRow(surface, ink, Icons.Filled.CalendarMonth, tr("remind_day_before"), remindBefore) { remindBefore = it; putBool("remind_day_before", it); reschedule() }
                         ToggleRow(surface, ink, Icons.Filled.Alarm, tr("repeat_until_done"), repeatDay) { repeatDay = it; putBool("repeat_on_fingerprint_day", it) }
                         ToggleRow(surface, ink, Icons.Filled.Event, tr("remind_next_day"), remindSecondDay) { remindSecondDay = it; putBool("remind_second_day", it); reschedule() }
@@ -877,9 +969,9 @@ private fun methodName(method: String, lang: String): String = when (method) {
 @Composable private fun tr(k: String, n: Int? = null): String {
     val l = currentLanguage()
     val values = when (l) {
-        "en" -> mapOf("home" to "Home", "appointments" to "Appointments", "history" to "History", "settings" to "Settings", "secure_alarm" to "Smart alarm active and protected", "secure_sub" to "Three-day reminders are scheduled", "new_fingerprint" to "Add fingerprint appointment", "soon" to "Upcoming", "next_appointment" to "Next appointment date", "days_left" to "$n days left", "allowed_days" to "Allowed days", "main_day" to "Main date", "reminder" to "Reminder", "last_chance" to "Last chance", "confirm_fingerprint" to "Confirm fingerprint", "set_start" to "First appointment date", "alarm_time" to "Alarm time", "repeat_cycle" to "Repeat cycle", "every_28" to "Every 28 days", "official_cycle" to "Regular cycle", "weekly" to "Weekly", "every_week" to "Repeats every 7 days", "cycles_count" to "Number of appointments", "appointments_unit" to "appointments", "appointments_history_title" to "Appointments history", "previous_list" to "Past appointments", "no_previous" to "No past appointments yet", "no_upcoming" to "No upcoming appointments. Add a schedule.", "completed_short" to "Done", "elapsed" to "Elapsed", "elapsed_label" to "Appointment window passed", "not_confirmed_short" to "Not confirmed", "not_confirmed_label" to "Snoozing only delays the alarm; this appointment is not marked complete.", "choose_tone" to "Choose ringtone", "default_sound" to "Default alarm ringtone", "silent" to "Silent", "vibration" to "Vibration", "vibration_sub" to "Vibrate during the alarm", "sound_settings" to "Sound and vibration", "save" to "Save schedule", "cancel" to "Cancel", "history_title" to "Fingerprint appointment history", "history_sub" to "Review upcoming and completed dates", "upcoming" to "Upcoming", "previous" to "Completed", "new_short" to "New", "upcoming_list" to "Scheduled appointments", "grace_window" to "3-day window", "scheduled" to "Scheduled", "appointment_num" to "Appointment #$n", "completed_label" to "Completed", "language" to "Language", "appearance" to "Appearance", "system" to "System", "light" to "Light", "dark" to "Dark", "alarm_options" to "Permissions and reliability", "exact_alarm" to "Exact alarm access", "exact_alarm_sub" to "Allow precise scheduled alarms", "overlay" to "Display over other apps", "overlay_sub" to "Optional full-screen alarm display", "battery" to "Battery optimization", "battery_sub" to "Allow background alarm delivery", "notifications" to "Notifications", "notifications_sub" to "Manage notification permission", "alarm_sound" to "Alarm sound", "about_developer" to "About developer", "enable" to "Enable", "day_num" to "Day $n")
-        "tr" -> mapOf("home" to "Ana Sayfa", "appointments" to "Randevular", "history" to "Geçmiş", "settings" to "Ayarlar", "secure_alarm" to "Akıllı alarm etkin ve güvenli", "secure_sub" to "Üç günlük hatırlatıcılar ayarlandı", "new_fingerprint" to "Yeni randevu ekle", "soon" to "Yakında", "next_appointment" to "Sonraki randevu tarihi", "days_left" to "$n gün kaldı", "allowed_days" to "Uygun günler", "main_day" to "Ana tarih", "reminder" to "Hatırlatma", "last_chance" to "Son fırsat", "confirm_fingerprint" to "Parmak izini onayla", "set_start" to "İlk randevu tarihi", "alarm_time" to "Alarm saati", "repeat_cycle" to "Tekrarlama", "every_28" to "28 günde bir", "official_cycle" to "Düzenli döngü", "weekly" to "Haftalık", "every_week" to "7 günde bir", "cycles_count" to "Randevu sayısı", "appointments_unit" to "randevu", "appointments_history_title" to "Randevu geçmişi", "previous_list" to "Geçmiş randevular", "no_previous" to "Henüz geçmiş randevu yok", "no_upcoming" to "Yaklaşan randevu yok. Bir program ekleyin.", "completed_short" to "Tamamlandı", "elapsed" to "Geçti", "elapsed_label" to "Randevu süresi geçti", "not_confirmed_short" to "Onaylanmadı", "not_confirmed_label" to "Erteleme yalnızca alarmı geciktirir; randevu tamamlandı olarak kaydedilmez.", "choose_tone" to "Alarm sesini seç", "default_sound" to "Varsayılan alarm sesi", "silent" to "Sessiz", "vibration" to "Titreşim", "vibration_sub" to "Alarm sırasında titreşim", "sound_settings" to "Ses ve titreşim", "save" to "Programı kaydet", "cancel" to "İptal", "history_title" to "Parmak izi randevu geçmişi", "history_sub" to "Yaklaşan ve tamamlanan tarihleri görüntüle", "upcoming" to "Yaklaşan", "previous" to "Tamamlandı", "new_short" to "Yeni", "upcoming_list" to "Planlanan randevular", "grace_window" to "3 günlük süre", "scheduled" to "Planlandı", "appointment_num" to "Randevu #$n", "completed_label" to "Tamamlandı", "language" to "Dil", "appearance" to "Görünüm", "system" to "Sistem", "light" to "Açık", "dark" to "Koyu", "alarm_options" to "İzinler ve güvenilirlik", "exact_alarm" to "Kesin alarm izni", "exact_alarm_sub" to "Zamanında alarm kurulumu", "overlay" to "Diğer uygulamaların üzerinde göster", "overlay_sub" to "İsteğe bağlı tam ekran alarm", "battery" to "Pil optimizasyonu", "battery_sub" to "Arka plan alarmlarına izin ver", "notifications" to "Bildirimler", "notifications_sub" to "Bildirim izinlerini yönet", "alarm_sound" to "Alarm sesi", "about_developer" to "Geliştirici hakkında", "enable" to "Aç", "day_num" to "$n. gün")
-        else -> mapOf("home" to "الرئيسية", "appointments" to "المواعيد", "history" to "السجل", "settings" to "الإعدادات", "secure_alarm" to "المنبه الذكي نشط ومؤمّن", "secure_sub" to "تم ضبط تنبيهات مهلة الأيام الثلاثة بدقة", "new_fingerprint" to "تسجيل بصمة جديدة", "soon" to "قريباً", "next_appointment" to "موعد البصمة التالي المقرّر", "days_left" to "متبقي $n يوم", "allowed_days" to "الأيام المسموحة", "main_day" to "الأساسي", "reminder" to "تذكير", "last_chance" to "الفرصة الأخيرة", "confirm_fingerprint" to "تأكيد البصمة", "set_start" to "تاريخ أول بصمة", "alarm_time" to "وقت التنبيه", "repeat_cycle" to "دورة التكرار", "every_28" to "كل 28 يوماً", "official_cycle" to "الدورة المنتظمة", "weekly" to "أسبوعي", "every_week" to "يتكرر كل 7 أيام", "cycles_count" to "عدد المواعيد المجدولة", "appointments_unit" to "موعداً", "appointments_history_title" to "سجل المواعيد", "previous_list" to "المواعيد السابقة", "no_previous" to "لا توجد مواعيد سابقة بعد", "no_upcoming" to "لا توجد مواعيد قادمة. أضف جدول بصمات.", "completed_short" to "مكتمل", "elapsed" to "انتهى موعده", "elapsed_label" to "انتهت مهلة الموعد دون تأكيد", "not_confirmed_short" to "غير موثّق", "not_confirmed_label" to "لم يتم تأكيد البصمة. التأجيل يغيّر وقت التنبيه فقط ولا يسجل اكتمال الموعد.", "choose_tone" to "اختر نغمة", "default_sound" to "نغمة التنبيه الافتراضية", "silent" to "بدون صوت", "vibration" to "الاهتزاز", "vibration_sub" to "اهتزاز أثناء التنبيه", "sound_settings" to "صوت التنبيه", "save" to "حفظ المواعيد", "cancel" to "إلغاء", "history_title" to "سجل مواعيد البصمة", "history_sub" to "متابعة تواريخ البصمات السابقة والمقبلة", "upcoming" to "البصمات القادمة", "previous" to "البصمات السابقة", "new_short" to "بصمة جديدة", "upcoming_list" to "قائمة البصمات القادمة", "grace_window" to "مهلة السماح (3 أيام)", "scheduled" to "مجدول", "appointment_num" to "الموعد رقم $n", "completed_label" to "بصمة مكتملة بتاريخ", "language" to "اختر اللغة", "appearance" to "الثيم والمظهر", "system" to "النظام", "light" to "فاتح", "dark" to "داكن", "alarm_options" to "الأذونات وتفادي الإغلاق", "exact_alarm" to "السماح بالمنبهات الدقيقة", "exact_alarm_sub" to "تفعيل جدولة التنبيهات في وقتها", "overlay" to "الظهور فوق التطبيقات", "overlay_sub" to "إظهار واجهة المنبه فوق الشاشة", "battery" to "استثناء توفير البطارية", "battery_sub" to "منع نظام الهاتف من إيقاف المنبه", "notifications" to "إعدادات الإشعارات", "notifications_sub" to "السماح بعرض إشعارات المنبه", "alarm_sound" to "صوت التنبيه", "about_developer" to "حول المطور", "enable" to "تفعيل", "day_num" to "اليوم $n")
+        "en" -> mapOf("home" to "Home", "appointments" to "Appointments", "history" to "History", "settings" to "Settings", "secure_alarm" to "Smart alarm active and protected", "secure_sub" to "Three-day reminders are scheduled", "home_alarm_caveat" to "Doze and manufacturer restrictions may still delay or block alarms, even when permissions are granted.", "export_history" to "Export history", "export_failed" to "Could not open sharing options.", "note_save_failed" to "Could not save the note. Please try again.", "save_note" to "Save note", "high_priority_sub" to "Controls notification-channel priority and lock-screen visibility; it does not override Android's full-screen permission.", "new_fingerprint" to "Add fingerprint appointment", "soon" to "Upcoming", "next_appointment" to "Next appointment date", "days_left" to "$n days left", "allowed_days" to "Allowed days", "main_day" to "Main date", "reminder" to "Reminder", "last_chance" to "Last chance", "confirm_fingerprint" to "Confirm fingerprint", "set_start" to "First appointment date", "alarm_time" to "Alarm time", "repeat_cycle" to "Repeat cycle", "every_28" to "Every 28 days", "official_cycle" to "Regular cycle", "weekly" to "Weekly", "every_week" to "Repeats every 7 days", "cycles_count" to "Number of appointments", "appointments_unit" to "appointments", "appointments_history_title" to "Appointments history", "previous_list" to "Past appointments", "no_previous" to "No past appointments yet", "no_upcoming" to "No upcoming appointments. Add a schedule.", "completed_short" to "Done", "elapsed" to "Elapsed", "elapsed_label" to "Appointment window passed", "not_confirmed_short" to "Not confirmed", "not_confirmed_label" to "Snoozing only delays the alarm; this appointment is not marked complete.", "choose_tone" to "Choose ringtone", "default_sound" to "Default alarm ringtone", "silent" to "Silent", "vibration" to "Vibration", "vibration_sub" to "Vibrate during the alarm", "sound_settings" to "Sound and vibration", "save" to "Save schedule", "cancel" to "Cancel", "history_title" to "Fingerprint appointment history", "history_sub" to "Review upcoming and completed dates", "upcoming" to "Upcoming", "previous" to "Completed", "new_short" to "New", "upcoming_list" to "Scheduled appointments", "grace_window" to "3-day window", "scheduled" to "Scheduled", "appointment_num" to "Appointment #$n", "completed_label" to "Completed", "language" to "Language", "appearance" to "Appearance", "system" to "System", "light" to "Light", "dark" to "Dark", "alarm_options" to "Permissions and reliability", "exact_alarm" to "Exact alarm access", "exact_alarm_sub" to "Allow precise scheduled alarms", "overlay" to "Display over other apps", "overlay_sub" to "Optional full-screen alarm display", "battery" to "Battery optimization", "battery_sub" to "Allow background alarm delivery", "notifications" to "Notifications", "notifications_sub" to "Manage notification permission", "alarm_sound" to "Alarm sound", "about_developer" to "About developer", "enable" to "Enable", "day_num" to "Day $n")
+        "tr" -> mapOf("home" to "Ana Sayfa", "appointments" to "Randevular", "history" to "Geçmiş", "settings" to "Ayarlar", "secure_alarm" to "Akıllı alarm etkin ve güvenli", "secure_sub" to "Üç günlük hatırlatıcılar ayarlandı", "home_alarm_caveat" to "İzinler verilse bile Doze ve üretici kısıtlamaları alarmları geciktirebilir veya engelleyebilir.", "export_history" to "Geçmişi dışa aktar", "export_failed" to "Paylaşım seçenekleri açılamadı.", "note_save_failed" to "Not kaydedilemedi. Lütfen tekrar deneyin.", "save_note" to "Notu kaydet", "high_priority_sub" to "Bildirim kanalı önceliğini ve kilit ekranında görünürlüğü belirler; Android'in tam ekran iznini aşmaz.", "new_fingerprint" to "Yeni randevu ekle", "soon" to "Yakında", "next_appointment" to "Sonraki randevu tarihi", "days_left" to "$n gün kaldı", "allowed_days" to "Uygun günler", "main_day" to "Ana tarih", "reminder" to "Hatırlatma", "last_chance" to "Son fırsat", "confirm_fingerprint" to "Parmak izini onayla", "set_start" to "İlk randevu tarihi", "alarm_time" to "Alarm saati", "repeat_cycle" to "Tekrarlama", "every_28" to "28 günde bir", "official_cycle" to "Düzenli döngü", "weekly" to "Haftalık", "every_week" to "7 günde bir", "cycles_count" to "Randevu sayısı", "appointments_unit" to "randevu", "appointments_history_title" to "Randevu geçmişi", "previous_list" to "Geçmiş randevular", "no_previous" to "Henüz geçmiş randevu yok", "no_upcoming" to "Yaklaşan randevu yok. Bir program ekleyin.", "completed_short" to "Tamamlandı", "elapsed" to "Geçti", "elapsed_label" to "Randevu süresi geçti", "not_confirmed_short" to "Onaylanmadı", "not_confirmed_label" to "Erteleme yalnızca alarmı geciktirir; randevu tamamlandı olarak kaydedilmez.", "choose_tone" to "Alarm sesini seç", "default_sound" to "Varsayılan alarm sesi", "silent" to "Sessiz", "vibration" to "Titreşim", "vibration_sub" to "Alarm sırasında titreşim", "sound_settings" to "Ses ve titreşim", "save" to "Programı kaydet", "cancel" to "İptal", "history_title" to "Parmak izi randevu geçmişi", "history_sub" to "Yaklaşan ve tamamlanan tarihleri görüntüle", "upcoming" to "Yaklaşan", "previous" to "Tamamlandı", "new_short" to "Yeni", "upcoming_list" to "Planlanan randevular", "grace_window" to "3 günlük süre", "scheduled" to "Planlandı", "appointment_num" to "Randevu #$n", "completed_label" to "Tamamlandı", "language" to "Dil", "appearance" to "Görünüm", "system" to "Sistem", "light" to "Açık", "dark" to "Koyu", "alarm_options" to "İzinler ve güvenilirlik", "exact_alarm" to "Kesin alarm izni", "exact_alarm_sub" to "Zamanında alarm kurulumu", "overlay" to "Diğer uygulamaların üzerinde göster", "overlay_sub" to "İsteğe bağlı tam ekran alarm", "battery" to "Pil optimizasyonu", "battery_sub" to "Arka plan alarmlarına izin ver", "notifications" to "Bildirimler", "notifications_sub" to "Bildirim izinlerini yönet", "alarm_sound" to "Alarm sesi", "about_developer" to "Geliştirici hakkında", "enable" to "Aç", "day_num" to "$n. gün")
+        else -> mapOf("home" to "الرئيسية", "appointments" to "المواعيد", "history" to "السجل", "settings" to "الإعدادات", "secure_alarm" to "المنبه الذكي نشط ومؤمّن", "secure_sub" to "تم ضبط تنبيهات مهلة الأيام الثلاثة بدقة", "home_alarm_caveat" to "قد يمنع وضع Doze أو قيود الشركة المصنّعة التنبيهات أو يؤخرها حتى مع منح الأذونات.", "export_history" to "تصدير السجل", "export_failed" to "تعذر فتح خيارات المشاركة.", "note_save_failed" to "تعذر حفظ الملاحظة. حاول مرة أخرى.", "save_note" to "حفظ الملاحظة", "high_priority_sub" to "يتحكم بأولوية قناة الإشعار وظهوره على شاشة القفل؛ ولا يتجاوز صلاحية ملء الشاشة في Android.", "new_fingerprint" to "تسجيل بصمة جديدة", "soon" to "قريباً", "next_appointment" to "موعد البصمة التالي المقرّر", "days_left" to "متبقي $n يوم", "allowed_days" to "الأيام المسموحة", "main_day" to "الأساسي", "reminder" to "تذكير", "last_chance" to "الفرصة الأخيرة", "confirm_fingerprint" to "تأكيد البصمة", "set_start" to "تاريخ أول بصمة", "alarm_time" to "وقت التنبيه", "repeat_cycle" to "دورة التكرار", "every_28" to "كل 28 يوماً", "official_cycle" to "الدورة المنتظمة", "weekly" to "أسبوعي", "every_week" to "يتكرر كل 7 أيام", "cycles_count" to "عدد المواعيد المجدولة", "appointments_unit" to "موعداً", "appointments_history_title" to "سجل المواعيد", "previous_list" to "المواعيد السابقة", "no_previous" to "لا توجد مواعيد سابقة بعد", "no_upcoming" to "لا توجد مواعيد قادمة. أضف جدول بصمات.", "completed_short" to "مكتمل", "elapsed" to "انتهى موعده", "elapsed_label" to "انتهت مهلة الموعد دون تأكيد", "not_confirmed_short" to "غير موثّق", "not_confirmed_label" to "لم يتم تأكيد البصمة. التأجيل يغيّر وقت التنبيه فقط ولا يسجل اكتمال الموعد.", "choose_tone" to "اختر نغمة", "default_sound" to "نغمة التنبيه الافتراضية", "silent" to "بدون صوت", "vibration" to "الاهتزاز", "vibration_sub" to "اهتزاز أثناء التنبيه", "sound_settings" to "صوت التنبيه", "save" to "حفظ المواعيد", "cancel" to "إلغاء", "history_title" to "سجل مواعيد البصمة", "history_sub" to "متابعة تواريخ البصمات السابقة والمقبلة", "upcoming" to "البصمات القادمة", "previous" to "البصمات السابقة", "new_short" to "بصمة جديدة", "upcoming_list" to "قائمة البصمات القادمة", "grace_window" to "مهلة السماح (3 أيام)", "scheduled" to "مجدول", "appointment_num" to "الموعد رقم $n", "completed_label" to "بصمة مكتملة بتاريخ", "language" to "اختر اللغة", "appearance" to "الثيم والمظهر", "system" to "النظام", "light" to "فاتح", "dark" to "داكن", "alarm_options" to "الأذونات وتفادي الإغلاق", "exact_alarm" to "السماح بالمنبهات الدقيقة", "exact_alarm_sub" to "تفعيل جدولة التنبيهات في وقتها", "overlay" to "الظهور فوق التطبيقات", "overlay_sub" to "إظهار واجهة المنبه فوق الشاشة", "battery" to "استثناء توفير البطارية", "battery_sub" to "منع نظام الهاتف من إيقاف المنبه", "notifications" to "إعدادات الإشعارات", "notifications_sub" to "السماح بعرض إشعارات المنبه", "alarm_sound" to "صوت التنبيه", "about_developer" to "حول المطور", "enable" to "تفعيل", "day_num" to "اليوم $n")
     }
     val extra = when (l) {
         "en" -> mapOf("language_sub" to "Choose the app language", "appearance_sub" to "Light, dark, or system appearance", "alarm_settings_sub" to "Sound, ringtone, vibration and reminders", "customized" to "Custom", "permissions" to "Permissions and notifications", "permissions_sub" to "Overlay, full screen, notifications, battery", "manage" to "Manage", "about_app" to "About app", "about_app_sub" to "Version and app details", "developer_sub" to "Contact and social accounts", "disclaimer" to "Disclaimer", "disclaimer_sub" to "Terms and usage notes", "full_screen_permission" to "Full-screen alarm permission", "version" to "Version", "package" to "Package", "disclaimer_body" to "Alarms depend on the permissions and background-execution rules of the device. Verify alarm operation on your phone.", "close" to "Close", "enabled" to "Enabled", "alarm_tone" to "Alarm ringtone", "choose_tone" to "Choose ringtone", "default_sound" to "Default alarm ringtone", "silent" to "Silent")
@@ -912,16 +1004,19 @@ private fun methodName(method: String, lang: String): String = when (method) {
     val approved = when (l) {
         "en" -> mapOf(
             "legacy_history_note" to "Saved as complete before detailed event logging was added; no exact confirmation time was stored.", "setup_assistant" to "Reminder setup assistant", "setup_assistant_sub" to "Review alarm permissions and settings", "schedule_name" to "Schedule name", "new_schedule" to "New schedule", "schedule_ended" to "This schedule has ended", "schedule_ended_sub" to "All configured appointments are complete. Edit the schedule to add more cycles, or create another schedule.", "extend_schedule" to "Extend schedule", "not_yet" to "Not available yet", "available_now" to "Available now",
+            "history_retention_notice" to "History keeps the 500 most recent events. Export a copy to keep older records.",
             "confirmed_at" to "Confirmed at", "confirmation_method" to "Confirmation method", "note" to "Note", "note_optional" to "Optional note", "add_note" to "Add note", "edit_note" to "Edit note",
-            "reliability_title" to "Alarm reliability status", "reliability_ready" to "Required alarm permissions are available", "reliability_no_schedule" to "No schedule saved", "reliability_exact_missing" to "Exact alarms are not allowed", "reliability_notifications_missing" to "Notifications are disabled", "reliability_fullscreen_missing" to "Full-screen alarm permission is off", "reliability_next" to "Next alarm", "reliability_last_schedule" to "Last rescheduled", "reliability_caveat" to "Device or manufacturer background limits may still affect delivery."
+            "reliability_title" to "Alarm reliability status", "reliability_ready" to "Required alarm permissions are available", "reliability_no_schedule" to "No schedule saved", "reliability_exact_missing" to "Exact alarms are not allowed", "reliability_notifications_missing" to "Notifications are disabled", "reliability_channel_missing" to "The selected alarm notification channel is disabled", "reliability_fullscreen_missing" to "Full-screen alarm permission is off", "reliability_next" to "Next alarm", "reliability_last_schedule" to "Last rescheduled", "reliability_caveat" to "Device or manufacturer background limits may still affect delivery."
         )
         "tr" -> mapOf(
             "legacy_history_note" to "Ayrıntılı kayıt eklenmeden önce tamamlandı olarak saklanmış; kesin onay saati bulunmuyor.", "setup_assistant" to "Alarm kurulum yardımcısı", "setup_assistant_sub" to "Alarm izinlerini ve ayarlarını gözden geçirin", "schedule_name" to "Program adı", "new_schedule" to "Yeni program", "schedule_ended" to "Bu program sona erdi", "schedule_ended_sub" to "Belirlenen randevular tamamlandı. Döngü eklemek için programı düzenleyin veya yeni bir program oluşturun.", "extend_schedule" to "Programı uzat", "not_yet" to "Henüz uygun değil", "available_now" to "Şimdi uygun",
+            "history_retention_notice" to "Geçmiş en son 500 olayı saklar. Eski kayıtları korumak için dışa aktarın.",
             "confirmed_at" to "Onay zamanı", "confirmation_method" to "Onay yöntemi", "note" to "Not", "note_optional" to "İsteğe bağlı not", "add_note" to "Not ekle", "edit_note" to "Notu düzenle",
-            "reliability_title" to "Alarm güvenilirlik durumu", "reliability_ready" to "Gerekli alarm izinleri kullanılabilir", "reliability_no_schedule" to "Kayıtlı program yok", "reliability_exact_missing" to "Kesin alarmlara izin verilmedi", "reliability_notifications_missing" to "Bildirimler kapalı", "reliability_fullscreen_missing" to "Tam ekran alarm izni kapalı", "reliability_next" to "Sonraki alarm", "reliability_last_schedule" to "Son yeniden planlama", "reliability_caveat" to "Cihaz veya üretici arka plan kısıtlamaları teslimatı yine etkileyebilir."
+            "reliability_title" to "Alarm güvenilirlik durumu", "reliability_ready" to "Gerekli alarm izinleri kullanılabilir", "reliability_no_schedule" to "Kayıtlı program yok", "reliability_exact_missing" to "Kesin alarmlara izin verilmedi", "reliability_notifications_missing" to "Bildirimler kapalı", "reliability_channel_missing" to "Seçili alarm bildirim kanalı kapalı", "reliability_fullscreen_missing" to "Tam ekran alarm izni kapalı", "reliability_next" to "Sonraki alarm", "reliability_last_schedule" to "Son yeniden planlama", "reliability_caveat" to "Cihaz veya üretici arka plan kısıtlamaları teslimatı yine etkileyebilir."
         )
         else -> mapOf(
             "legacy_history_note" to "سُجل كمكتمل في إصدار سابق قبل حفظ تفاصيل الأحداث؛ لا يتوفر وقت تأكيد دقيق.", "setup_assistant" to "مساعد إعداد التنبيهات", "setup_assistant_sub" to "مراجعة أذونات التنبيه وإعداداته", "schedule_name" to "اسم الجدول", "new_schedule" to "جدول جديد", "schedule_ended" to "انتهت مواعيد هذا الجدول", "schedule_ended_sub" to "اكتملت جميع المواعيد المحددة. عدّل الجدول لإضافة دورات، أو أنشئ جدولاً آخر.", "extend_schedule" to "تمديد الجدول", "not_yet" to "لم يحن الموعد بعد", "available_now" to "الموعد متاح الآن",
+            "history_retention_notice" to "يحتفظ السجل بآخر 500 حدث فقط. صدّر نسخة للاحتفاظ بالسجلات الأقدم.",
             "confirmed_at" to "وقت التأكيد", "confirmation_method" to "طريقة التأكيد", "note" to "ملاحظة", "note_optional" to "ملاحظة اختيارية", "add_note" to "إضافة ملاحظة", "edit_note" to "تعديل الملاحظة",
             "reliability_title" to "حالة موثوقية التنبيهات", "reliability_ready" to "الأذونات الأساسية للتنبيه متاحة", "reliability_no_schedule" to "لا يوجد جدول محفوظ", "reliability_exact_missing" to "المنبهات الدقيقة غير مسموحة", "reliability_notifications_missing" to "الإشعارات معطلة", "reliability_fullscreen_missing" to "إذن التنبيه بملء الشاشة معطل", "reliability_next" to "التنبيه التالي", "reliability_last_schedule" to "آخر إعادة جدولة", "reliability_caveat" to "قد تؤثر قيود الخلفية الخاصة بالشركة المصنّعة على وصول التنبيه."
         )

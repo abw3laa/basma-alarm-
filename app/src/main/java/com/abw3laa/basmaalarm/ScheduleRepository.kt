@@ -24,6 +24,7 @@ object ScheduleRepository {
     private const val KEY_SCHEDULES = "schedules_v1"
     private const val KEY_ACTIVE = "active_schedule_id"
     private const val KEY_EVENTS = "appointment_events_v1"
+    private const val MAX_EVENTS = 500
 
     private fun prefs(c: Context) = c.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -102,13 +103,23 @@ object ScheduleRepository {
         if (!isScheduledDate || !AppointmentRules.canConfirm(occurrence, LocalDate.now())) return false
         if (baseEpochDay in schedule.completedEpochDays) return false
         val updated = schedule.copy(completedEpochDays = schedule.completedEpochDays + baseEpochDay)
-        save(c, updated)
+        val updatedSchedules = all(c).map { if (it.id == scheduleId) updated else it }
+        if (updatedSchedules.none { it.id == scheduleId }) return false
         val event = JSONObject().put("scheduleId", schedule.id).put("scheduleName", schedule.name)
             .put("appointmentEpochDay", baseEpochDay).put("confirmedAtEpochMillis", System.currentTimeMillis())
             .put("method", method).put("status", AppointmentState.COMPLETED.name).put("note", note)
-        val array = runCatching { JSONArray(prefs(c).getString(KEY_EVENTS, "[]")) }.getOrDefault(JSONArray())
-        array.put(event)
-        prefs(c).edit().putString(KEY_EVENTS, array.toString()).apply()
+        val currentEvents = runCatching { JSONArray(prefs(c).getString(KEY_EVENTS, "[]")) }.getOrNull() ?: return false
+        val eventList = (0 until currentEvents.length()).map { currentEvents.get(it) } + event
+        val boundedEvents = HistoryRetentionPolicy.keepNewest(eventList, MAX_EVENTS) { item ->
+            (item as? JSONObject)?.optLong("confirmedAtEpochMillis") ?: 0L
+        }
+        val eventsArray = JSONArray().also { array -> boundedEvents.forEach(array::put) }
+        val committed = prefs(c).edit()
+            .putString(KEY_SCHEDULES, schedulesJson(updatedSchedules))
+            .putString(KEY_EVENTS, eventsArray.toString())
+            .commit()
+        if (!committed) return false
+        runCatching { AppointmentWidgetProvider.updateAll(c) }
         return true
     }
 
@@ -120,17 +131,23 @@ object ScheduleRepository {
         }.sortedByDescending { it.confirmedAtEpochMillis }
     }.getOrDefault(emptyList())
 
-    fun updateEventNote(c: Context, confirmedAtEpochMillis: Long, note: String) {
+    fun updateEventNote(c: Context, scheduleId: String, appointmentEpochDay: Long, note: String): Boolean {
         val prefs = prefs(c)
-        val array = runCatching { JSONArray(prefs.getString(KEY_EVENTS, "[]")) }.getOrDefault(JSONArray())
+        val array = runCatching { JSONArray(prefs.getString(KEY_EVENTS, "[]")) }.getOrNull() ?: return false
+        var found = false
         for (index in 0 until array.length()) {
             val event = array.optJSONObject(index) ?: continue
-            if (event.optLong("confirmedAtEpochMillis") == confirmedAtEpochMillis) {
+            if (event.optLong("confirmedAtEpochMillis") > 0L &&
+                event.optString("scheduleId") == scheduleId &&
+                event.optLong("appointmentEpochDay") == appointmentEpochDay
+            ) {
                 event.put("note", note.take(280))
+                found = true
                 break
             }
         }
-        prefs.edit().putString(KEY_EVENTS, array.toString()).apply()
+        if (!found) return false
+        return prefs.edit().putString(KEY_EVENTS, array.toString()).commit()
     }
 
     private fun allWithoutMigration(c: Context): List<FingerprintSchedule> {
@@ -143,10 +160,11 @@ object ScheduleRepository {
     }
 
     private fun persist(c: Context, schedules: List<FingerprintSchedule>) {
-        val array = JSONArray()
-        schedules.forEach { array.put(toJson(it)) }
-        prefs(c).edit().putString(KEY_SCHEDULES, array.toString()).apply()
+        prefs(c).edit().putString(KEY_SCHEDULES, schedulesJson(schedules)).apply()
     }
+
+    private fun schedulesJson(schedules: List<FingerprintSchedule>): String =
+        JSONArray().also { array -> schedules.forEach { array.put(toJson(it)) } }.toString()
 
     private fun toJson(s: FingerprintSchedule) = JSONObject().put("id", s.id).put("name", s.name)
         .put("start", s.start.toString()).put("intervalDays", s.intervalDays).put("appointmentCount", s.appointmentCount)

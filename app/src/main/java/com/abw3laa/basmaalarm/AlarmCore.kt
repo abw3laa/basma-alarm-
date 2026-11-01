@@ -85,15 +85,17 @@ object AlarmScheduler {
     private fun requestCode(schedule: FingerprintSchedule, baseDay: Long, suffix: Int): Int =
         ((schedule.notificationId * 31 + (baseDay xor (baseDay ushr 32)).toInt()) * 7 + suffix) and 0x7fffffff
 
-    private fun alarmIntent(c: Context, schedule: FingerprintSchedule, baseDay: Long, epochDay: Long, windowDay: Int, action: String, repeated: Boolean = false, snooze: Boolean = false): Intent =
-        Intent(c, AlarmReceiver::class.java).setAction(action)
-            .setData(Uri.parse("basmaalarm://alarm/${schedule.id}/$baseDay/$epochDay/$windowDay/$action/${if (repeated) 1 else 0}/${if (snooze) 1 else 0}"))
+    private fun alarmIntent(c: Context, schedule: FingerprintSchedule, baseDay: Long, epochDay: Long, windowDay: Int, action: String, repeated: Boolean = false, snooze: Boolean = false, legacySnoozeEpochIdentity: Boolean = false): Intent {
+        val identityEpoch = if (legacySnoozeEpochIdentity) epochDay else AlarmPendingIdentity.uriEpochDay(baseDay, epochDay, snooze)
+        return Intent(c, AlarmReceiver::class.java).setAction(action)
+            .setData(Uri.parse("basmaalarm://alarm/${schedule.id}/$baseDay/$identityEpoch/$windowDay/$action/${if (repeated) 1 else 0}/${if (snooze) 1 else 0}"))
             .putExtra(EXTRA_SCHEDULE_ID, schedule.id).putExtra(EXTRA_BASE_DAY, baseDay)
             .putExtra(EXTRA_EPOCH_DAY, epochDay).putExtra(EXTRA_WINDOW, windowDay)
             .putExtra(EXTRA_REPEAT, repeated).putExtra(EXTRA_SNOOZE, snooze)
+    }
 
-    private fun pending(c: Context, schedule: FingerprintSchedule, baseDay: Long, epochDay: Long, windowDay: Int, action: String = ACTION_FIRE, repeated: Boolean = false, snooze: Boolean = false, noCreate: Boolean = false): PendingIntent? {
-        val intent = alarmIntent(c, schedule, baseDay, epochDay, windowDay, action, repeated, snooze)
+    private fun pending(c: Context, schedule: FingerprintSchedule, baseDay: Long, epochDay: Long, windowDay: Int, action: String = ACTION_FIRE, repeated: Boolean = false, snooze: Boolean = false, noCreate: Boolean = false, legacySnoozeEpochIdentity: Boolean = false): PendingIntent? {
+        val intent = alarmIntent(c, schedule, baseDay, epochDay, windowDay, action, repeated, snooze, legacySnoozeEpochIdentity)
         val flags = PendingIntent.FLAG_IMMUTABLE or if (noCreate) PendingIntent.FLAG_NO_CREATE else PendingIntent.FLAG_UPDATE_CURRENT
         val id = requestCode(schedule, baseDay, windowDay * 11 + action.hashCode())
         return PendingIntent.getBroadcast(c, id, intent, flags)
@@ -105,6 +107,10 @@ object AlarmScheduler {
             pending(c, schedule, baseDay, epoch, day + 1, ACTION_FIRE, noCreate = true)?.let { manager.cancel(it); it.cancel() }
             pending(c, schedule, baseDay, epoch, day + 1, ACTION_FIRE, repeated = true, noCreate = true)?.let { manager.cancel(it); it.cancel() }
             pending(c, schedule, baseDay, baseDay, day + 1, ACTION_FIRE, snooze = true, noCreate = true)?.let { manager.cancel(it); it.cancel() }
+            // Remove pre-fix snoozes, whose identity included the day on which they were created.
+            for (oldEpoch in AlarmPendingIdentity.legacySnoozeEpochDays(baseDay)) {
+                pending(c, schedule, baseDay, oldEpoch, day + 1, ACTION_FIRE, snooze = true, noCreate = true, legacySnoozeEpochIdentity = true)?.let { manager.cancel(it); it.cancel() }
+            }
         }
         val preDay = baseDay - 1
         pending(c, schedule, baseDay, preDay, 0, ACTION_PRE_NOTICE, noCreate = true)?.let { manager.cancel(it); it.cancel() }
@@ -115,7 +121,11 @@ object AlarmScheduler {
         for (n in 0 until schedule.appointmentCount) {
             val base = schedule.start.plusDays(n.toLong() * schedule.intervalDays).toEpochDay()
             cancelOccurrence(c, manager, schedule, base)
-            if (schedule.id == "legacy") cancelLegacyPending(c, manager, base)
+            // Pre-migration PendingIntents have no schedule identity. Clean them only when
+            // there is exactly one legacy schedule, so they cannot cancel another schedule.
+            if (schedule.id == "legacy" && AlarmPrefs.schedules(c).singleOrNull()?.id == "legacy") {
+                cancelLegacyPending(c, manager, base)
+            }
         }
         c.getSystemService(NotificationManager::class.java).apply {
             cancel(NOTIFICATION_ID_BASE + schedule.notificationId); cancel(NOTIFICATION_PRE_NOTICE_BASE + schedule.notificationId)
@@ -123,19 +133,19 @@ object AlarmScheduler {
         }
     }
 
+    fun cancelAll(c: Context) { AlarmPrefs.schedules(c).forEach { cancelSchedule(c, it) } }
+
     private fun cancelLegacyPending(c: Context, manager: AlarmManager, baseDay: Long) {
         fun cancel(code: Int, action: String) {
             val intent = Intent(c, AlarmReceiver::class.java).setAction(action)
-            PendingIntent.getBroadcast(c, code, intent, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)?.let { manager.cancel(it); it.cancel() }
+            PendingIntent.getBroadcast(c, code, intent, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)
+                ?.let { manager.cancel(it); it.cancel() }
         }
         for (day in 0..2) cancel((baseDay + day).toInt(), ACTION_FIRE)
         cancel(2_000_000 + (baseDay % 500_000).toInt(), ACTION_FIRE)
         cancel(1_000_000 + (baseDay % 500_000).toInt(), ACTION_FIRE)
-        val pre = baseDay - 1
-        cancel(3_000_000 + (pre % 500_000).toInt(), ACTION_PRE_NOTICE)
+        cancel(3_000_000 + ((baseDay - 1) % 500_000).toInt(), ACTION_PRE_NOTICE)
     }
-
-    fun cancelAll(c: Context) { AlarmPrefs.schedules(c).forEach { cancelSchedule(c, it) } }
 
     fun schedule(c: Context) {
         cancelAll(c)
@@ -222,7 +232,7 @@ object AlarmScheduler {
             it.cancel()
         }
         val at = System.currentTimeMillis() + AlarmPrefs.snoozeMinutes(c) * 60_000L
-        val pi = pending(c, schedule, baseDay, LocalDate.now().toEpochDay(), windowDay, ACTION_FIRE, snooze = true) ?: return
+        val pi = pending(c, schedule, baseDay, baseDay, windowDay, ACTION_FIRE, snooze = true) ?: return
         setAlarm(c, c.getSystemService(AlarmManager::class.java), at, pi, schedule, baseDay, windowDay)
     }
 
@@ -251,6 +261,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val schedule = AlarmPrefs.schedule(context, scheduleId) ?: return
         val baseDay = intent.getLongExtra(EXTRA_BASE_DAY, LocalDate.now().toEpochDay())
         val windowDay = intent.getIntExtra(EXTRA_WINDOW, 1)
+        if (baseDay in schedule.completedEpochDays) return
         if (intent.action == ACTION_PRE_NOTICE) {
             ensureAlarmChannel(context)
             val lang = AlarmPrefs.language(context)
@@ -268,10 +279,11 @@ class AlarmReceiver : BroadcastReceiver() {
             .setData(Uri.parse("basmaalarm://ring/$scheduleId/$baseDay/$windowDay"))
         val full = PendingIntent.getActivity(context, 8000 + schedule.notificationId * 4 + windowDay, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         ensureAlarmChannel(context)
-        val notification = NotificationCompat.Builder(context, alarmChannelId(context)).setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+        val channelId = alarmChannelId(context)
+        val notification = NotificationCompat.Builder(context, channelId).setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
             .setContentTitle(schedule.name).setContentText(alarmBody(context, windowDay))
             .setCategory(NotificationCompat.CATEGORY_ALARM).setPriority(if (AlarmPrefs.highPriority(context)) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_DEFAULT)
-            .setOngoing(true).setAutoCancel(false).setFullScreenIntent(full, AlarmPrefs.highPriority(context)).setContentIntent(full).build()
+            .setOngoing(true).setAutoCancel(false).setFullScreenIntent(full, canRequestFullScreenIntent(context, channelId)).setContentIntent(full).build()
         context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID_BASE + schedule.notificationId, notification)
     }
 }
@@ -583,6 +595,14 @@ class AlarmActionReceiver : BroadcastReceiver() {
 }
 
 fun alarmChannelId(c: Context) = if (AlarmPrefs.highPriority(c)) CHANNEL_ALARM_HIGH else CHANNEL_ALARM_NORMAL
+
+/** A request, not a promise: Android/user policy may still suppress full-screen presentation. */
+private fun canRequestFullScreenIntent(c: Context, channelId: String): Boolean {
+    val manager = c.getSystemService(NotificationManager::class.java)
+    if (!androidx.core.app.NotificationManagerCompat.from(c).areNotificationsEnabled()) return false
+    if (Build.VERSION.SDK_INT >= 26 && (manager.getNotificationChannel(channelId)?.importance ?: NotificationManager.IMPORTANCE_NONE) == NotificationManager.IMPORTANCE_NONE) return false
+    return Build.VERSION.SDK_INT < 34 || runCatching { manager.canUseFullScreenIntent() }.getOrDefault(false)
+}
 fun ensureAlarmChannel(c: Context) {
     if (Build.VERSION.SDK_INT >= 26) {
         val nm = c.getSystemService(NotificationManager::class.java)
@@ -606,10 +626,11 @@ fun buildNotification(c: Context, base: Long, day: Int, scheduleId: String? = nu
     val done = when (lang) { "tr" -> "Tamamlandı"; "en" -> "Completed"; else -> "تمت البصمة" }
     val snooze = when (lang) { "tr" -> "${AlarmPrefs.snoozeMinutes(c)} dk ertele"; "en" -> "Snooze ${AlarmPrefs.snoozeMinutes(c)} min"; else -> "غفوة ${AlarmPrefs.snoozeMinutes(c)} د" }
     val stop = when (lang) { "tr" -> "Sesi durdur"; "en" -> "Stop sound"; else -> "إيقاف الصوت" }
-    return NotificationCompat.Builder(c, alarmChannelId(c)).setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+    val channelId = alarmChannelId(c)
+    return NotificationCompat.Builder(c, channelId).setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
         .setContentTitle(alarmTitle(c)).setContentText("${schedule.name}: ${alarmBody(c, day)}")
         .setCategory(NotificationCompat.CATEGORY_ALARM).setPriority(if (AlarmPrefs.highPriority(c)) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_DEFAULT)
-        .setOngoing(true).setFullScreenIntent(full, AlarmPrefs.highPriority(c)).setContentIntent(full)
+        .setOngoing(true).setFullScreenIntent(full, canRequestFullScreenIntent(c, channelId)).setContentIntent(full)
         .addAction(action(done, ACTION_DONE, 8200 + day)).addAction(action(snooze, ACTION_SNOOZE, 8300 + day)).addAction(action(stop, ACTION_STOP, 8400 + day)).build()
 }
 const val CHANNEL_ALARM = "basma_alarm_channel"
